@@ -1,17 +1,19 @@
 module.exports = {
   apps: [{
     name: 'madhu-portfolio',
-    script: 'dist/server.js',
+    script: 'serve',
     env_production: {
       NODE_ENV: 'production',
       PORT: 8898,
     },
     env_development: {
-      NODE_ENV: 'development',
-      PORT: 8898,
+      PM2_SERVE_PATH: 'build',
+      PM2_SERVE_PORT: 8898,
+      PM2_SERVE_SPA: 'true',
+      // NODE_ENV: 'development',
+      // PORT: 8898,
     },
     watch: false,
-    max_memory_restart: '1G',
     instances: 1,
   }],
   deploy: {
@@ -21,7 +23,7 @@ module.exports = {
       repo: 'git@github.com:madhusudansinghrathore/madhusudansingh_portfolio.git',
       path: '/var/www/madhusudansingh_rathore_portfolio/production',
       'pre-deploy-local': '',
-      'post-deploy': 'npm install && npm run build && pm2 startOrRestart ecosystem.config.js --env production',
+      'post-deploy': 'npm install && npm run build && pm2 startOrRestart ecosystem.config.js --env production --only madhu-portfolio',
       'pre-setup': 'echo "Deploying from local machine..."'
     },
     development: {
@@ -30,7 +32,7 @@ module.exports = {
       repo: 'git@github.com:madhusudansinghrathore/madhusudansingh_portfolio.git',
       path: '/var/www/madhusudansingh_rathore_portfolio/staging',
       'pre-deploy-local': '',
-      'post-deploy': 'npm install && npm run build && pm2 startOrRestart ecosystem.config.js --env development',
+      'post-deploy': 'npm install && npm run build && pm2 startOrRestart ecosystem.config.js --env development --only madhu-portfolio',
       'pre-setup': 'echo "Deploying from local machine..."'
     }
   }
