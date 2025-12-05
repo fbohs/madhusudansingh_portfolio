@@ -102,7 +102,7 @@ const config: Config = {
           items: [
             {
               label: 'Tutorial',
-              to: '/docs/revise-network/intro',
+              to: '/docs/nginx/intro',
             },
           ],
         },
