@@ -85,6 +85,7 @@ const config: Config = {
           position: 'left',
           label: 'Portfolio',
         },
+        { to: '/about', label: 'About', position: 'left' },
         { to: '/blog', label: 'Articles & Tutorials', position: 'left' },
         {
           href: 'https://github.com/madhusudansinghrathore',
@@ -93,51 +94,51 @@ const config: Config = {
         },
       ],
     },
-    // footer: {
-    //   style: 'dark',
-    //   links: [
-    //     {
-    //       title: 'Docs',
-    //       items: [
-    //         {
-    //           label: 'Tutorial',
-    //           to: '/docs/intro',
-    //         },
-    //       ],
-    //     },
-    //     {
-    //       title: 'Community',
-    //       items: [
-    //         {
-    //           label: 'Stack Overflow',
-    //           href: 'https://stackoverflow.com/questions/tagged/docusaurus',
-    //         },
-    //         {
-    //           label: 'Discord',
-    //           href: 'https://discordapp.com/invite/docusaurus',
-    //         },
-    //         {
-    //           label: 'X',
-    //           href: 'https://x.com/docusaurus',
-    //         },
-    //       ],
-    //     },
-    //     {
-    //       title: 'More',
-    //       items: [
-    //         {
-    //           label: 'Blog',
-    //           to: '/blog',
-    //         },
-    //         {
-    //           label: 'GitHub',
-    //           href: 'https://github.com/facebook/docusaurus',
-    //         },
-    //       ],
-    //     },
-    //   ],
-    //   copyright: `Copyright © ${new Date().getFullYear()} My Project, Inc. Built with Docusaurus.`,
-    // },
+    footer: {
+      style: 'dark',
+      links: [
+        {
+          title: 'Docs',
+          items: [
+            {
+              label: 'Tutorial',
+              to: '/docs/revise-network/intro',
+            },
+          ],
+        },
+        {
+          title: 'Community',
+          items: [
+            {
+              label: 'Telegram',
+              href: 'https://t.me/rmadhusudan359',
+            },
+            {
+              label: 'Discord',
+              href: 'https://discordapp.com/users/fbohs888',
+            },
+            {
+              label: 'X',
+              href: 'https://x.com/rmadhusudan359',
+            },
+          ],
+        },
+        {
+          title: 'More',
+          items: [
+            {
+              label: 'Blog',
+              to: '/blog',
+            },
+            {
+              label: 'GitHub',
+              href: 'https://github.com/madhusudansinghrathore/madhusudansingh_portfolio',
+            },
+          ],
+        },
+      ],
+      copyright: `Copyright © ${new Date().getFullYear()}.`,
+    },
     prism: {
       theme: prismThemes.github,
       darkTheme: prismThemes.dracula,
