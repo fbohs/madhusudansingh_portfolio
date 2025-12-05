@@ -73,17 +73,17 @@ const config: Config = {
       respectPrefersColorScheme: true,
     },
     navbar: {
-      title: 'Portfolio',
+      title: 'madhusudansinghrathore',
       logo: {
-        alt: 'Portfolio Logo',
+        alt: 'madhusudansinghrathore Logo',
         src: 'img/logo.svg',
       },
       items: [
         {
           type: 'docSidebar',
-          sidebarId: 'portfolioSidebar',
+          sidebarId: 'documentationSidebar',
           position: 'left',
-          label: 'Portfolio',
+          label: 'Documentation',
         },
         { to: '/about', label: 'About', position: 'left' },
         { to: '/blog', label: 'Articles & Tutorials', position: 'left' },
