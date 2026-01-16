@@ -8,6 +8,7 @@
 .docusaurus
 .cache-loader
 
+/site
 # Logs
 logs
 *.log
