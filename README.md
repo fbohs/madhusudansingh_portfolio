@@ -1,41 +1,57 @@
-# Website
+# Madhusudansingh Rathore - Portfolio
 
-This website is built using [Docusaurus](https://docusaurus.io/), a modern static website generator.
+This website is built using [MkDocs](https://www.mkdocs.org/) and the [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/) theme. It serves as my professional portfolio and documentation hub.
 
-## Installation
+## Project Structure
 
-```bash
-yarn
-```
+- `docs/`: Markdown content source files.
+- `mkdocs.yml`: Configuration file.
 
 ## Local Development
 
+Prerequisites: Python and pip.
+
+1. **Install MkDocs and Material Theme:**
+
 ```bash
-yarn start
+pip install mkdocs-material
 ```
 
-This command starts a local development server and opens up a browser window. Most changes are reflected live without having to restart the server.
+2. **Initialize Python Virtual Environment**
+
+```bash
+python3 -m venv .venv
+```
+
+3. **Initialize Python Virtual Environment**
+
+```bash
+source .venv/bin/activate
+```
+
+4. **Start the development server:**
+
+```bash
+mkdocs serve --livereload
+```
+
+Open [http://localhost:8000](http://localhost:8000) in your browser.
 
 ## Build
 
+To build the static site:
+
 ```bash
-yarn build
+mkdocs build
 ```
 
-This command generates static content into the `build` directory and can be served using any static contents hosting service.
+This generates the static HTML files in the `site/` directory.
 
 ## Deployment
 
-Using SSH:
+This site can be deployed to GitHub Pages or any static site host using the built-in deploy command:
 
 ```bash
-USE_SSH=true yarn deploy
+mkdocs build
+rsync -avzP ./site/ user@remote:/path/to/server/root
 ```
-
-Not using SSH:
-
-```bash
-GIT_USER=<Your GitHub username> yarn deploy
-```
-
-If you are using GitHub pages for hosting, this command is a convenient way to build the website and push to the `gh-pages` branch.

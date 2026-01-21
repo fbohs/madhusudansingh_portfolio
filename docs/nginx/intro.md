@@ -1,52 +1,23 @@
----
-title: Getting Started Guide
----
+# Nginx Configuration & Best Practices
 
-# Tutorial Intro
+Welcome to the Nginx documentation section. This collection of guides focuses on setting up a secure, high-performance Nginx environment suitable for production workloads.
 
-Let's discover **Docusaurus in less than 5 minutes**.
+## Key Sections
 
-## Getting Started
+### [Setup](setup.md)
+The foundation of a secure web server. This guide covers:
+- **Installation:** Deploying Nginx on Ubuntu/Debian and CentOS/RHEL.
+- **Security Hardening:** Implementing essential security headers (HSTS, X-Frame-Options).
+- **SSL/TLS:** Automating certificate management with Certbot (Let's Encrypt).
 
-Get started by **creating a new site**.
+### [Rate Limiting](rate-limiting.md)
+Protect your applications from abuse and ensure fair resource usage. Learn about:
+- **Standard Practices:** Basic request limiting for APIs and login endpoints.
+- **Advanced Techniques:** Geo-based blocking, multi-stage limiting, and bot detection.
+- **Implementation:** Real-world examples for separate API, Auth, and Public zones.
 
-Or **try Docusaurus immediately** with **[docusaurus.new](https://docusaurus.new)**.
-
-### What you'll need
-
-- [Node.js](https://nodejs.org/en/download/) version 20.0 or above:
-  - When installing Node.js, you are recommended to check all checkboxes related to dependencies.
-
-## Generate a new site
-
-Generate a new Docusaurus site using the **classic template**.
-
-The classic template will automatically be added to your project after you run the command:
-
-```bash
-npm init docusaurus@latest my-website classic
-```
-
-You can type this command into Command Prompt, Powershell, Terminal, or any other integrated terminal of your code editor.
-
-The command also installs all necessary dependencies you need to run Docusaurus.
-
-## Start your site
-
-Run the development server:
-
-```bash
-cd my-website
-npm run start
-```
-
-The `cd` command changes the directory you're working with. In order to work with your newly created Docusaurus site, you'll need to navigate the terminal there.
-
-The `npm run start` command builds your website locally and serves it through a development server, ready for you to view at http://localhost:3000/.
-
-Open `docs/intro.md` (this page) and edit some lines: the site **reloads automatically** and displays your changes.
-
-hi hello 123
-## Getting Started
-
-Get started by **creating a new site**.
+### [Logging](logging.md)
+Turn your logs into powerful security tools. This section details:
+- **Security Logging:** Custom log formats to capture critical security context.
+- **Monitoring:** Integrating logs with alerting systems.
+- **Compliance:** Auditing access patterns and potential threats.

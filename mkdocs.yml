@@ -1,5 +1,6 @@
-site_name: My Docs
-site_url: https://mydomain.org/mysite
+site_name: Madhusudansingh Rathore Portfolio
+site_description: Portfolio of Madhusudansingh Rathore
+site_url: https://themadhu.dev
 theme:
   name: material
   palette:
@@ -7,6 +8,13 @@ theme:
       scheme: slate
       primary: indigo
       accent: deep orange
+  features:
+    - navigation.sections
+    - navigation.path
+    - navigation.indexes
+    - navigation.top
 plugins:
   - search
-  - blog
+  # - blog
+  - meta
+  - social
