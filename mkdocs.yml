@@ -19,7 +19,41 @@ plugins:
   - meta
   - social
 
+nav:
+  - Home: index.md
+  - System Design:
+    - Overview: System Design/intro.md
+    - Message Queues: System Design/message-queues.md
+  - API Fundamentals:
+    - Overview: API Fundamentals/intro.md
+    - HTTP: API Fundamentals/http.md
+    - REST: API Fundamentals/rest.md
+    - GraphQL: API Fundamentals/graphql.md
+    - RPC (gRPC, tRPC): API Fundamentals/rpc.md
+    - IPC: API Fundamentals/ipc.md
+    - WebSockets: API Fundamentals/websockets.md
+    - Server-Sent Events: API Fundamentals/sse.md
+    - Status Codes: API Fundamentals/status-codes.md
+    - Design Patterns & Cheat Sheet: API Fundamentals/lc-lg-ls.md
+  - Generative AI:
+    - Overview: Generative AI/intro.md
+    - LLM Fundamentals: Generative AI/llm-fundamentals.md
+    - Prompt Engineering: Generative AI/prompt-engineering.md
+    - RAG: Generative AI/rag.md
+    - LangChain: Generative AI/langchain.md
+    - LangGraph: Generative AI/langgraph.md
+    - LangSmith: Generative AI/langsmith.md
+  - Miscellaneous:
+    - Quick Reference: Miscellaneous/misc.md
+  - Nginx:
+    - Intro: nginx/intro.md
+    - Setup: nginx/setup.md
+    - Rate Limiting: nginx/rate-limiting.md
+    - Logging: nginx/logging.md
+
 markdown_extensions:
+  - admonition
+  - pymdownx.details
   - pymdownx.superfences:
       custom_fences:
         - name: mermaid

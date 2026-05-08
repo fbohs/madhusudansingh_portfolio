@@ -2,7 +2,7 @@
 
 [madhu@themadhu.dev](mailto:madhu@themadhu.dev) • [www.themadhu.dev](https://www.themadhu.dev) • [LinkedIn](https://linkedin.com/in/fbohs) • [GitHub](https://github.com/fbohs)
 
-Founding Engineer with 6+ years of experience building scalable backends with Applied AI and Web3 infrastructure. Proven track record in launching AI-driven CRM tools, Decentralized Social Media Platforms and migrating multi-billion dollar enterprises to flagship SaaS ERPs.
+Founding Engineer with 7+ years of experience building scalable backends with Applied AI and Web3 infrastructure. Proven track record in launching AI-driven CRM tools, Decentralized Social Media Platforms and migrating multi-billion dollar enterprises to flagship SaaS ERPs.
 
 **Experience**
 
