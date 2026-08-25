@@ -1,0 +1,4 @@
+# Direct dependencies. mkdocs itself comes in via mkdocs-material.
+# The [imaging] extra pulls Pillow + CairoSVG, required by the `social` plugin.
+# CairoSVG needs the system cairo library: brew install cairo freetype libpng
+mkdocs-material[imaging]==9.7.6
