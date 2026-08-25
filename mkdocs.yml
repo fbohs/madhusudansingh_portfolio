@@ -54,8 +54,10 @@ nav:
   - Learnings:
     - Database:
       - Overview: Database/intro.md
+      - Indexing: Database/indexing.md
       - Sequence: Database/sequence.md
       - Bigint vs Uuidv7 Id Strategy: Project Learnings/bigint-vs-uuidv7-id-strategy.md
+      - Interview Questions: Database/database_questions.md
       - Senior Engineer Database Answers: Database/senior_engineer_database_answers.md
     - Prisma & Kysely:
       - Overview: Prisma & Kysely/intro.md
@@ -65,12 +67,22 @@ nav:
       - Persist Hydration SSR Error: Project Learnings/persist-hydration-ssr-error.md
       - Prisma BigSerial Alter Column: Project Learnings/prisma-bigserial-alter-column.md
     - Authentication-Authorization:
+      - Quick Bites : Authentication-Authorization/quick-bites.md
       - Authentication & Authorization: Authentication-Authorization/auth.md
       - JWTs Are Overrated: Authentication-Authorization/jwt-overrated.md
       - Authentication is a Developer Nightmare: Authentication-Authorization/auth-nightmare.md
       - Auth Token Compilation: Authentication-Authorization/compilation.md
       - Authentication Methods Explained: Authentication-Authorization/real-world.md
       - Pragmatic Approach to Authentication: Authentication-Authorization/real-world-2.md
+    - Go:
+      - Refresher: Go/golang-sde1-interview.md
+      - Trivia: Go/trivia.md
+    - Python:
+      - Python 3 DSA Reference: Python3/python-dsa-reference.md
+      - Python 3 Cheatsheet: Python3/python3-sde3-reference.md
+      - 30 Days: Python3/30-day-senior-prep.md
+    - DSA:
+      - DSA : DSA/dsa-cheatsheet.md
   - Miscellaneous:
     - Quick Reference: Miscellaneous/misc.md
     - Fastify VPS Scaling Guide: Miscellaneous/fastify_vps_scaling_guide.md
