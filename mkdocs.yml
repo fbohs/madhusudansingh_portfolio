@@ -4,10 +4,12 @@ site_url: https://themadhu.dev
 theme:
   name: material
   palette:
-    - media: "(prefers-color-scheme: dark)"
-      scheme: slate
-      primary: indigo
-      accent: deep orange
+    - scheme: slate
+      primary: custom
+      accent: custom
+  font:
+    text: Sora
+    code: JetBrains Mono
   features:
     - navigation.sections
     - navigation.path
@@ -90,5 +92,10 @@ markdown_extensions:
           class: mermaid
           format: !!python/name:pymdownx.superfences.fence_code_format
 
+extra_css:
+  - stylesheets/extra.css
+
 extra_javascript:
-  - https://unpkg.com/mermaid@11/dist/mermaid.min.js
+  # mermaid itself is not listed here — mermaid-init.js fetches it on demand,
+  # only on pages that actually contain a diagram. See that file.
+  - javascripts/mermaid-init.js
