@@ -21,7 +21,13 @@
       "Read(./.env)",
       "Read(./.env.*)",
       "Bash(rsync*)",
-      "Bash(pm2*)"
+      "Bash(pm2*)",
+      "Bash(./deploy/publish.sh --apply*)",
+      "Bash(deploy/publish.sh --apply*)",
+      "Bash(bash deploy/publish.sh --apply*)",
+      "Bash(sh deploy/publish.sh --apply*)",
+      "Bash(ssh vps-79tech-deploy*)",
+      "Bash(scp*vps-79tech-deploy*)"
     ]
   }
 }
