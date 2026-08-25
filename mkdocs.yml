@@ -23,6 +23,7 @@ plugins:
 
 nav:
   - Home: index.md
+  - About: about.md
   - System Design:
     - Overview: System Design/intro.md
     - Message Queues: System Design/message-queues.md
