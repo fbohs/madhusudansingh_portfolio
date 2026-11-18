@@ -1,11 +1,14 @@
 # Top 100+ Database Questions for Senior Engineers
-## PostgreSQL & MySQL Focus
+## PostgreSQL Focus
+
+> Answers live in [Senior Engineer Database Answers](senior_engineer_database_answers.md) —
+> question numbers match one-to-one.
 
 ---
 
 ## 1. FUNDAMENTAL CONCEPTS (15 questions)
 
-1. **What is the difference between a clustered and non-clustered index, and how are they handled differently in PostgreSQL vs MySQL (InnoDB)?**
+1. **PostgreSQL stores tables as heaps and every index is non-clustered. What follows from that, and how does it differ from a clustered-index engine like InnoDB?**
 
 2. **Explain the difference between a primary key and a unique constraint. When would you use one over the other?**
 
@@ -37,7 +40,7 @@
 
 ---
 
-## 2. INDEXING & QUERY OPTIMIZATION (20 questions)
+## 2. INDEXING & QUERY OPTIMIZATION (19 questions)
 
 16. **What is a composite (multi-column) index and what is the significance of column order?**
 
@@ -53,7 +56,7 @@
 
 22. **Explain what EXPLAIN and EXPLAIN ANALYZE show you, and how to read their output.**
 
-23. **What is index bloat and how do you detect and remediate it in PostgreSQL vs MySQL?**
+23. **What is index bloat in PostgreSQL, and how do you detect and remediate it?**
 
 24. **Describe the different join algorithms (Nested Loop, Hash Join, Merge Join) and when each is used.**
 
@@ -67,297 +70,269 @@
 
 29. **Explain why adding more indexes doesn't always improve performance.**
 
-30. **What is a clustered scan vs non-clustered scan in the context of InnoDB?**
+30. **How would you optimize a query with multiple DISTINCT operations?**
 
-31. **How would you optimize a query with multiple DISTINCT operations?**
+31. **Explain the difference between functional indexes and expression indexes.**
 
-32. **Explain the difference between functional indexes and expression indexes.**
+32. **What is a deferred index build and why might you use it?**
 
-33. **What is a deferred index build and why might you use it?**
+33. **How do you handle query optimization for very large LIKE patterns?**
 
-34. **How do you handle query optimization for very large LIKE patterns?**
-
-35. **Describe the performance implications of using functions in WHERE clauses.**
+34. **Describe the performance implications of using functions in WHERE clauses.**
 
 ---
 
 ## 3. CONCURRENCY & LOCKING (15 questions)
 
-36. **Explain the different row lock modes in PostgreSQL (FOR UPDATE, FOR SHARE, etc.).**
+35. **Explain the different row lock modes in PostgreSQL (FOR UPDATE, FOR SHARE, etc.).**
 
-37. **What is lock escalation and how is it handled in PostgreSQL vs MySQL?**
+36. **What is lock escalation, why does PostgreSQL never do it, and what does it take at table level instead?**
 
-38. **Describe deadlock scenarios and how to prevent them.**
+37. **Describe deadlock scenarios and how to prevent them.**
 
-39. **What is a blocking query and how do you identify and resolve it?**
+38. **What is a blocking query and how do you identify and resolve it?**
 
-40. **Explain the differences between shared locks and exclusive locks.**
+39. **Explain the differences between shared locks and exclusive locks.**
 
-41. **What is the purpose of sequence numbers and how are they handled concurrently?**
+40. **What is the purpose of sequence numbers and how are they handled concurrently?**
 
-42. **Describe the concept of "gap locks" in MySQL InnoDB and why they exist.**
+41. **PostgreSQL has no gap locks. How does it prevent write-side phantoms, and what does that require of your application?**
 
-43. **What is a page lock vs row lock, and when would each occur?**
+42. **How does PostgreSQL store row locks, and why does locking millions of rows still cost you something?**
 
-44. **How does PostgreSQL's MVCC (Multi-Version Concurrency Control) work?**
+43. **How does PostgreSQL's MVCC (Multi-Version Concurrency Control) work?**
 
-45. **Explain the concept of transaction isolation levels and their trade-offs.**
+44. **Explain the concept of transaction isolation levels and their trade-offs.**
 
-46. **What is a lock wait timeout and how do you configure it?**
+45. **What is a lock wait timeout and how do you configure it?**
 
-47. **Describe the difference between optimistic and pessimistic locking with examples.**
+46. **Describe the difference between optimistic and pessimistic locking with examples.**
 
-48. **What are "phantom rows" and how do different isolation levels handle them?**
+47. **What are "phantom rows" and how do different isolation levels handle them?**
 
-49. **How do you detect and monitor lock contention?**
+48. **How do you detect and monitor lock contention?**
 
-50. **Explain the purpose of advisory locks in PostgreSQL.**
+49. **Explain the purpose of advisory locks in PostgreSQL.**
 
 ---
 
 ## 4. TRANSACTIONS & ACID (12 questions)
 
-51. **Explain the ACID properties and why they matter.**
+50. **Explain the ACID properties and why they matter.**
 
-52. **What is a dirty read, non-repeatable read, and phantom read? How do isolation levels prevent each?**
+51. **What is a dirty read, non-repeatable read, and phantom read? How do isolation levels prevent each?**
 
-53. **Describe the four SQL isolation levels (READ UNCOMMITTED, READ COMMITTED, REPEATABLE READ, SERIALIZABLE).**
+52. **Describe the four SQL isolation levels (READ UNCOMMITTED, READ COMMITTED, REPEATABLE READ, SERIALIZABLE).**
 
-54. **What is the difference between snapshot isolation and serializable snapshot isolation?**
+53. **What is the difference between snapshot isolation and serializable snapshot isolation?**
 
-55. **Explain savepoints and how you would use them in a transaction.**
+54. **Explain savepoints and how you would use them in a transaction.**
 
-56. **What is an implicit transaction vs explicit transaction?**
+55. **What is an implicit transaction vs explicit transaction?**
 
-57. **Describe what happens when a transaction is rolled back. What are the implications?**
+56. **Describe what happens when a transaction is rolled back. What are the implications?**
 
-58. **How do long-running transactions impact database performance?**
+57. **How do long-running transactions impact database performance?**
 
-59. **What is transaction log (WAL in PostgreSQL) and why is it critical?**
+58. **What is transaction log (WAL in PostgreSQL) and why is it critical?**
 
-60. **Explain the concept of "consistency" in ACID. Why is it different from isolation?**
+59. **Explain the concept of "consistency" in ACID. Why is it different from isolation?**
 
-61. **What is a distributed transaction and what challenges does it present?**
+60. **What is a distributed transaction and what challenges does it present?**
 
-62. **Describe the purpose and gotchas of autocommit mode.**
-
----
-
-## 5. REPLICATION & HIGH AVAILABILITY (12 questions)
-
-63. **Explain the difference between synchronous and asynchronous replication.**
-
-64. **What is a read replica and what are the use cases?**
-
-65. **Describe the causes and implications of replication lag.**
-
-66. **How does PostgreSQL's streaming replication work?**
-
-67. **What is logical replication and how does it differ from physical replication?**
-
-68. **Explain the concept of "split brain" in a replication setup and how to prevent it.**
-
-69. **What is a failover, failback, and switchover?**
-
-70. **Describe the architecture of a semi-synchronous replication setup.**
-
-71. **How do you identify and resolve replication conflicts?**
-
-72. **What is WAL archiving and how is it used for backup and recovery?**
-
-73. **Explain the differences between MySQL's binary log formats (ROW, STATEMENT, MIXED).**
-
-74. **What is GTID-based replication and what advantages does it provide?**
+61. **Describe the purpose and gotchas of autocommit mode.**
 
 ---
 
-## 6. MAINTENANCE & ADMINISTRATION (15 questions)
+## 5. REPLICATION & HIGH AVAILABILITY (11 questions)
 
-75. **Explain the importance of VACUUM in PostgreSQL and how it works.**
+62. **Explain the difference between synchronous and asynchronous replication.**
 
-76. **What is autovacuum and how do you tune it for different workloads?**
+63. **What is a read replica and what are the use cases?**
 
-77. **How do you perform an online schema migration on a large table without downtime?**
+64. **Describe the causes and implications of replication lag.**
 
-78. **Describe the process and trade-offs of reorganizing a table.**
+65. **How does PostgreSQL's streaming replication work?**
 
-79. **What is bloat in PostgreSQL and how do you detect/reduce it?**
+66. **What is logical replication and how does it differ from physical replication?**
 
-80. **How do you safely drop a column in a large table?**
+67. **Explain the concept of "split brain" in a replication setup and how to prevent it.**
 
-81. **Explain the difference between a full backup, incremental backup, and differential backup.**
+68. **What is a failover, failback, and switchover?**
 
-82. **What is point-in-time recovery (PITR) and how do you implement it?**
+69. **Describe the architecture of a semi-synchronous replication setup.**
 
-83. **How do you monitor database health and set up appropriate alerts?**
+70. **How do you identify and resolve replication conflicts?**
 
-84. **Describe the purpose and configuration of slow query logs.**
+71. **What is WAL archiving and how is it used for backup and recovery?**
 
-85. **What is an upgrade path for major/minor version changes?**
-
-86. **How do you estimate table and index sizes, and what do you do if they're growing unexpectedly?**
-
-87. **Explain the process of analyzing table statistics and rebuilding statistics.**
-
-88. **What is table fragmentation in MySQL and how do you address it?**
-
-89. **Describe the process of creating and maintaining a comprehensive backup strategy.**
+72. **How does PostgreSQL track a replica's position (LSN, timelines), and what does `pg_rewind` require to reattach a diverged primary?**
 
 ---
 
-## 7. PERFORMANCE TUNING (15 questions)
+## 6. MAINTENANCE & ADMINISTRATION (14 questions)
 
-90. **What are the key PostgreSQL configuration parameters and how do you tune them for different hardware?**
+73. **Explain the importance of VACUUM in PostgreSQL and how it works.**
 
-91. **Explain shared_buffers, effective_cache_size, work_mem, and maintenance_work_mem in PostgreSQL.**
+74. **What is autovacuum and how do you tune it for different workloads?**
 
-92. **How do you tune MySQL's buffer pool, key cache, and query cache?**
+75. **How do you perform an online schema migration on a large table without downtime?**
 
-93. **What is the relationship between database performance and disk I/O patterns?**
+76. **Describe the process and trade-offs of reorganizing a table.**
 
-94. **How do you identify whether a performance issue is CPU-bound, memory-bound, or I/O-bound?**
+77. **What is bloat in PostgreSQL and how do you detect/reduce it?**
 
-95. **Describe the performance implications of different data types (VARCHAR vs CHAR, INT vs BIGINT).**
+78. **How do you safely drop a column in a large table?**
 
-96. **What is checkpoint frequency and how does it impact performance?**
+79. **Explain the difference between a full backup, incremental backup, and differential backup.**
 
-97. **How do you optimize for SSD vs HDD storage?**
+80. **What is point-in-time recovery (PITR) and how do you implement it?**
 
-98. **Explain the performance impact of foreign keys and when to use them.**
+81. **How do you monitor database health and set up appropriate alerts?**
 
-99. **What is query result caching and what are the trade-offs?**
+82. **Describe the purpose and configuration of slow query logs.**
 
-100. **How do you approach performance optimization for queries aggregating billions of rows?**
+83. **What is an upgrade path for major/minor version changes?**
 
----
+84. **How do you estimate table and index sizes, and what do you do if they're growing unexpectedly?**
 
-## 8. EDGE CASES & GOTCHAS (8 questions)
+85. **Explain the process of analyzing table statistics and rebuilding statistics.**
 
-101. **Describe the difference between COUNT(*) and COUNT(column) when column can be NULL.**
-
-102. **What happens with data consistency when you have cascading foreign keys and deletes?**
-
-103. **Explain the gotchas of using OFFSET for pagination on large result sets.**
-
-104. **What is the "off by one" problem in database design and how do you avoid it?**
-
-105. **Describe scenarios where DISTINCT can silently hide data issues.**
-
-106. **What are the implications of using UNIQUE constraints on nullable columns?**
-
-107. **Explain the behavior of IN vs EXISTS in different scenarios.**
-
-108. **What is the "Halloween Problem" in databases and how is it addressed?**
+86. **Describe the process of creating and maintaining a comprehensive backup strategy.**
 
 ---
 
-## 9. POSTGRESQL-SPECIFIC (10 questions)
+## 7. PERFORMANCE TUNING (10 questions)
 
-109. **Explain the TOAST (The Oversized-Attribute Storage Technique) mechanism in PostgreSQL.**
+87. **What are the key PostgreSQL configuration parameters and how do you tune them for different hardware?**
 
-110. **What are extensions in PostgreSQL and give examples of critical ones (e.g., pg_stat_statements, pgvector).**
+88. **Explain shared_buffers, effective_cache_size, work_mem, and maintenance_work_mem.**
 
-111. **Describe the differences between DELETE and TRUNCATE in PostgreSQL.**
+89. **What is the relationship between database performance and disk I/O patterns?**
 
-112. **What is tablespace in PostgreSQL and why would you use it?**
+90. **How do you identify whether a performance issue is CPU-bound, memory-bound, or I/O-bound?**
 
-113. **Explain Window Functions and provide a use case where they outperform alternatives.**
+91. **Describe the performance implications of different data types (VARCHAR vs CHAR, INT vs BIGINT).**
 
-114. **What is a CTE (Common Table Expression) and when is it better than a subquery?**
+92. **What is checkpoint frequency and how does it impact performance?**
 
-115. **Describe the role of the transaction ID (XID) in PostgreSQL and XID wraparound.**
+93. **How do you optimize for SSD vs HDD storage?**
 
-116. **What is the pg_stat_statements extension and how do you use it for performance analysis?**
+94. **Explain the performance impact of foreign keys and when to use them.**
 
-117. **Explain native JSON support in PostgreSQL and its performance implications.**
+95. **What is query result caching and what are the trade-offs?**
 
-118. **What is prepared statements and how do they prevent SQL injection?**
-
----
-
-## 10. MYSQL-SPECIFIC (10 questions)
-
-119. **Explain InnoDB vs MyISAM storage engines and when each is appropriate.**
-
-120. **What is the MySQL query cache (deprecated in 8.0) and why was it removed?**
-
-121. **Describe the role of the redo log and undo log in InnoDB.**
-
-122. **What is the change buffer in InnoDB and how does it improve write performance?**
-
-123. **Explain double-write buffering in InnoDB and why it's important.**
-
-124. **What is adaptive hash indexing in InnoDB?**
-
-125. **Describe the differences between NATURAL JOIN and explicit INNER JOIN.**
-
-126. **What are generated columns and what are their limitations in MySQL?**
-
-127. **Explain the role of the binlog and its importance in replication and recovery.**
-
-128. **What is the MySQL Query Optimizer Hint syntax and when would you use it?**
+96. **How do you approach performance optimization for queries aggregating billions of rows?**
 
 ---
 
-## 11. DATA TYPES & STORAGE (10 questions)
+## 8. EDGE CASES & GOTCHAS (9 questions)
 
-129. **What are the storage and performance implications of VARCHAR(max) columns?**
+97. **Describe the difference between COUNT(*) and COUNT(column) when column can be NULL.**
 
-130. **Explain the differences between DATE, DATETIME, and TIMESTAMP data types.**
+98. **What happens with data consistency when you have cascading foreign keys and deletes?**
 
-131. **What is the difference between DECIMAL and FLOAT/DOUBLE in databases?**
+99. **Explain the gotchas of using OFFSET for pagination on large result sets.**
 
-132. **Describe the implications of using ENUM data types.**
+100. **What is the "off by one" problem in database design and how do you avoid it?**
 
-133. **What are JSON data types and what are their performance considerations?**
+101. **Describe scenarios where DISTINCT can silently hide data issues.**
 
-134. **Explain the difference between TEXT and VARCHAR storage.**
+102. **What are the implications of using UNIQUE constraints on nullable columns?**
 
-135. **What are implications of using UUID as a primary key vs auto-incrementing INT?**
+103. **Explain the behavior of IN vs EXISTS in different scenarios.**
 
-136. **Describe the storage implications of nullable vs non-nullable columns.**
+104. **What is the "Halloween Problem" in databases and how is it addressed?**
 
-137. **What is the difference between SIGNED and UNSIGNED integers?**
-
-138. **How do you handle bit flags efficiently in a database?**
+105. **Describe the differences between NATURAL JOIN and explicit INNER JOIN.**
 
 ---
 
-## 12. SECURITY (5 questions)
+## 9. POSTGRESQL-SPECIFIC (11 questions)
 
-139. **Explain SQL injection and how parameterized queries prevent it.**
+106. **Explain the TOAST (The Oversized-Attribute Storage Technique) mechanism in PostgreSQL.**
 
-140. **What is the principle of least privilege and how do you apply it to database users?**
+107. **What are extensions in PostgreSQL and give examples of critical ones (e.g., pg_stat_statements, pgvector).**
 
-141. **Describe encryption at rest vs encryption in transit for databases.**
+108. **Describe the differences between DELETE and TRUNCATE in PostgreSQL.**
 
-142. **What is row-level security and how do you implement it in PostgreSQL?**
+109. **What is tablespace in PostgreSQL and why would you use it?**
 
-143. **Explain the security implications of default database configurations.**
+110. **Explain Window Functions and provide a use case where they outperform alternatives.**
+
+111. **What is a CTE (Common Table Expression) and when is it better than a subquery?**
+
+112. **Describe the role of the transaction ID (XID) in PostgreSQL and XID wraparound.**
+
+113. **What is the pg_stat_statements extension and how do you use it for performance analysis?**
+
+114. **Explain native JSON support in PostgreSQL and its performance implications.**
+
+115. **What is prepared statements and how do they prevent SQL injection?**
+
+116. **What are generated columns in PostgreSQL (12+), and what are their limitations?**
 
 ---
 
-## BONUS: PRACTICAL SCENARIOS (10 questions)
+## 10. DATA TYPES & STORAGE (10 questions)
 
-144. **You have a query that runs in 2 seconds but needs to run in 200ms. Walk through your optimization approach.**
+117. **What are the storage and performance implications of VARCHAR(max) columns?**
 
-145. **How would you redesign a table that has grown to 500GB and is slowing down?**
+118. **Explain the differences between DATE, DATETIME, and TIMESTAMP data types.**
 
-146. **A production database is experiencing high replication lag. What are your diagnostic steps?**
+119. **What is the difference between DECIMAL and FLOAT/DOUBLE in databases?**
 
-147. **You need to add a NOT NULL column to a table with 100M rows without downtime. How?**
+120. **Describe the implications of using ENUM data types.**
 
-148. **Describe how you would handle data migration between two different database systems.**
+121. **What are JSON data types and what are their performance considerations?**
 
-149. **A reporting query aggregates 10 billion rows and takes 30 minutes. How do you optimize it?**
+122. **Explain the difference between TEXT and VARCHAR storage.**
 
-150. **How would you implement real-time data analytics on top of a transactional database without impacting OLTP performance?**
+123. **What are implications of using UUID as a primary key vs auto-incrementing INT?**
 
-151. **Describe your approach to load testing a database migration.**
+124. **Describe the storage implications of nullable vs non-nullable columns.**
 
-152. **How do you handle bitemporal data (valid time and transaction time)?**
+125. **PostgreSQL has no unsigned integer types. What are your options when a counter approaches the INTEGER ceiling?**
 
-153. **Design a caching strategy for a high-traffic read-heavy application with a large dataset.**
+126. **How do you handle bit flags efficiently in a database?**
+
+---
+
+## 11. SECURITY (5 questions)
+
+127. **Explain SQL injection and how parameterized queries prevent it.**
+
+128. **What is the principle of least privilege and how do you apply it to database users?**
+
+129. **Describe encryption at rest vs encryption in transit for databases.**
+
+130. **What is row-level security and how do you implement it in PostgreSQL?**
+
+131. **Explain the security implications of default database configurations.**
+
+---
+
+## 12. PRACTICAL SCENARIOS (10 questions)
+
+132. **You have a query that runs in 2 seconds but needs to run in 200ms. Walk through your optimization approach.**
+
+133. **How would you redesign a table that has grown to 500GB and is slowing down?**
+
+134. **A production database is experiencing high replication lag. What are your diagnostic steps?**
+
+135. **You need to add a NOT NULL column to a table with 100M rows without downtime. How?**
+
+136. **Describe how you would handle data migration between two different database systems.**
+
+137. **A reporting query aggregates 10 billion rows and takes 30 minutes. How do you optimize it?**
+
+138. **How would you implement real-time data analytics on top of a transactional database without impacting OLTP performance?**
+
+139. **Describe your approach to load testing a database migration.**
+
+140. **How do you handle bitemporal data (valid time and transaction time)?**
+
+141. **Design a caching strategy for a high-traffic read-heavy application with a large dataset.**
 
 ---
 
@@ -365,7 +340,7 @@
 
 1. **Go deep, not wide**: For each question, understand not just the answer but the "why" and the trade-offs.
 
-2. **Hands-on practice**: Set up PostgreSQL and MySQL locally. Run EXPLAIN ANALYZE, create indexes, observe query plans.
+2. **Hands-on practice**: Run a local PostgreSQL. Use `EXPLAIN (ANALYZE, BUFFERS)`, create indexes, watch plans change.
 
 3. **Read documentation**: The official docs are often better than blogs. Understand the nuances.
 
@@ -384,12 +359,11 @@
 ## FURTHER READING RECOMMENDATIONS
 
 - **PostgreSQL Official Documentation**: https://www.postgresql.org/docs/
-- **MySQL Official Documentation**: https://dev.mysql.com/doc/
+- **"PostgreSQL 16 Internals" by Egor Rogov** — free online, the deepest free resource on PG internals
 - **"PostgreSQL Query Performance Insights" by Gülnihan Çalış**
-- **"High Performance MySQL" by Baron Schwartz et al.**
 - **Depesz's PostgreSQL Blog**: https://www.depesz.com/
 - **PlanetPostgreSQL**: https://planet.postgresql.org/
-- **MySQL Performance Blog**: https://www.percona.com/blog/
+- **pgMustard's EXPLAIN glossary**: https://www.pgmustard.com/docs/explain
 
 ---
 

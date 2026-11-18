@@ -1,5 +1,5 @@
 # Senior Engineer's Database Reference Guide
-## Pragmatic Answers for PostgreSQL & MySQL
+## Pragmatic Answers for PostgreSQL
 
 > **How to use this guide**: Each answer follows a What/Why/How/Trade-offs/Real-world pattern. Focus on the *why* and *trade-offs* — that's what separates senior engineers from juniors.
 
@@ -7,36 +7,36 @@
 
 ## SECTION 1: FUNDAMENTAL CONCEPTS
 
-### Q1. Clustered vs Non-Clustered Index (PostgreSQL vs MySQL InnoDB)
+### Q1. PostgreSQL's Heap Storage — Why Every Index Is Non-Clustered
 
-**What**: A clustered index physically orders table rows on disk by the index key. Non-clustered indexes are separate structures pointing to row locations.
+**What**: PostgreSQL stores every table as an unordered **heap**. Indexes are separate structures holding a key plus a `ctid` (physical page + offset) pointing into that heap. Nothing about the heap's physical order is maintained.
 
-**Why it matters**: This is THE fundamental difference between MySQL and PostgreSQL storage that affects every query.
+**Why it matters**: This single design choice explains most of PostgreSQL's performance behaviour — why index lookups need a second fetch, why `VACUUM` exists, why index-only scans depend on the visibility map, and why PK choice costs less here than elsewhere.
 
-**How they differ**:
-- **InnoDB (MySQL)**: Tables are *always* clustered by primary key. Rows live INSIDE the PK B-tree leaves. Secondary indexes store PK values (not row pointers).
-- **PostgreSQL**: All indexes are non-clustered (heap-organized). `CLUSTER` command physically reorders rows ONE TIME — order isn't maintained after writes.
-
-**Pros/Cons**:
-| Aspect | InnoDB Clustered | PostgreSQL Heap |
-|--------|------------------|-----------------|
-| PK lookup | Single B-tree traversal | Index lookup + heap fetch |
-| Secondary index lookup | 2 lookups (secondary → PK → row) | 1 index + heap fetch |
-| Insert with random PK (UUID) | Page splits, fragmentation | No reordering, append-friendly |
-| Range scans on PK | Excellent (sequential) | Depends on physical order |
-
-**Real-world example**: At a payments company, switching from UUID v4 to UUID v7 (time-ordered) PKs on MySQL reduced write IOPS by 40% because B-tree leaf pages stopped splitting randomly. In PostgreSQL, this matters less for inserts but still helps index-only scans.
+**The consequences**:
+- **Every index lookup is two steps**: traverse the index, then fetch the row from the heap. There is no index whose leaves *are* the rows.
+- **`CLUSTER` is one-shot**: it physically reorders the heap once, then order decays with the next writes. It is not a maintained clustered index.
+- **Updates write a whole new row version** somewhere in the heap, leaving the old one dead until `VACUUM` reclaims it.
 
 ```sql
--- MySQL: PK choice has massive write impact
-CREATE TABLE orders (
-  id BINARY(16) PRIMARY KEY,  -- UUID v7 (time-ordered) >> UUID v4
-  amount DECIMAL(10,2)
-);
-
--- PostgreSQL: CLUSTER is one-shot, requires AccessExclusiveLock
-CLUSTER orders USING orders_created_at_idx;  -- Blocks reads/writes!
+-- CLUSTER rewrites the heap in index order — one time only
+CLUSTER orders USING orders_created_at_idx;  -- AccessExclusiveLock: blocks reads AND writes
+-- Non-blocking alternative:  pg_repack -t orders -o created_at
 ```
+
+**The contrast worth knowing** (MySQL/InnoDB is the usual point of comparison, and it is the *opposite* design): InnoDB tables are always clustered by primary key — rows live inside the PK B-tree leaves, and secondary indexes store PK values rather than physical pointers.
+
+| Aspect | PostgreSQL heap | InnoDB clustered |
+|--------|-----------------|------------------|
+| PK lookup | Index lookup + heap fetch | Single B-tree traversal |
+| Secondary index lookup | 1 index + heap fetch | 2 lookups (secondary → PK → row) |
+| Insert with random PK (UUID v4) | Heap just appends; only the index scatters | Splits table pages — table itself fragments |
+| Range scan on PK | Depends on current physical order | Sequential, excellent |
+| Row relocation on UPDATE | Invalidates index pointers → needs VACUUM | Free — secondary indexes reference the PK |
+
+**Why this matters when porting**: advice tuned for InnoDB often doesn't transfer. "Always use a narrow auto-increment PK or your table will fragment" is an InnoDB rule. In PostgreSQL a random PK leaves the *heap* fine — the cost lands on the index's cache locality instead.
+
+**Real-world example**: A payments team moved from UUID v4 to UUID v7 primary keys. On their MySQL fleet this had cut write IOPS ~40% by stopping random page splits in the clustered index. Repeating it on PostgreSQL gave a smaller but real win — the heap was never the problem, but monotonic keys kept index inserts hitting the same right-edge pages, which stayed in `shared_buffers` instead of forcing random reads.
 
 ---
 
@@ -46,7 +46,7 @@ CLUSTER orders USING orders_created_at_idx;  -- Blocks reads/writes!
 
 **Why distinct**: Semantic and physical differences matter.
 - Only ONE PK per table; multiple unique constraints allowed
-- PK in InnoDB defines the clustered index — choosing it is a physical layout decision
+- In PostgreSQL the PK is just a unique index over the heap — it does not dictate physical row order
 - Unique constraints allow NULLs (multiple NULLs allowed in PostgreSQL; behavior varies)
 
 **How they behave**:
@@ -57,8 +57,6 @@ CREATE TABLE users (
   email TEXT UNIQUE,           -- multiple NULL emails OK
   ssn TEXT UNIQUE NULLS NOT DISTINCT  -- PG 15+: treat NULLs as equal
 );
-
--- MySQL: similar NULL behavior; multiple NULLs allowed in UNIQUE
 ```
 
 **Pros/Cons**:
@@ -76,7 +74,7 @@ CREATE TABLE users (
 **Why it dominates**:
 1. **Logarithmic lookups** (O(log n))
 2. **Range scans are cheap** — leaves are linked
-3. **Disk-friendly** — node size matches page size (typically 8KB in PG, 16KB in InnoDB)
+3. **Disk-friendly** — node size matches page size (8KB in PostgreSQL by default)
 4. **Maintains sorted order** for ORDER BY without sorting
 
 **How it works**:
@@ -115,7 +113,7 @@ CREATE INDEX logs_ts_brin ON logs USING BRIN (created_at);
 | Storage | Row-oriented | Column-oriented |
 | Indexes | Many narrow indexes | Few wide indexes, partitions |
 | Latency target | ms | seconds/minutes |
-| Tools | PostgreSQL, MySQL | Snowflake, BigQuery, Redshift, ClickHouse |
+| Tools | PostgreSQL | Snowflake, BigQuery, Redshift, ClickHouse |
 
 **How a senior engineer approaches this**: Don't run analytics on your OLTP DB. Use CDC (Change Data Capture) to replicate to a warehouse.
 
@@ -205,7 +203,7 @@ CREATE TABLE user_profile_blobs (user_id BIGINT PK, bio TEXT, avatar BYTEA);
 - ❌ Rebalancing shards is operationally complex
 - ❌ Global uniqueness/secondary indexes need extra infra
 
-**Real-world example**: Discord sharded their messages table by `channel_id` across thousands of Cassandra nodes. PostgreSQL/MySQL alternative: Citus (PG), Vitess (MySQL). At a smaller scale, partitioning by month using PG native partitioning often suffices — don't shard prematurely.
+**Real-world example**: Discord sharded their messages table by `channel_id` across thousands of Cassandra nodes. PostgreSQL alternative: Citus. At a smaller scale, partitioning by month using PG native partitioning often suffices — don't shard prematurely.
 
 ---
 
@@ -317,7 +315,7 @@ WHERE id = 42 AND version = ?;  -- 0 rows affected → retry
 |-----------|-------|-----------|---------|
 | READ UNCOMMITTED | ❌ | ❌ | ❌ |
 | READ COMMITTED | ✅ | ❌ | ❌ |
-| REPEATABLE READ | ✅ | ✅ | ❌ (✅ in InnoDB/PG via snapshot) |
+| REPEATABLE READ | ✅ | ✅ | ❌ (✅ in PG via snapshot) |
 | SERIALIZABLE | ✅ | ✅ | ✅ |
 
 **Real-world example**: A bank report counted accounts twice because new accounts were inserted mid-query. Moving to REPEATABLE READ (PostgreSQL — uses snapshot isolation) fixed it. SERIALIZABLE wasn't needed because there were no write-write conflicts.
@@ -335,7 +333,7 @@ WHERE id = 42 AND version = ?;  -- 0 rows affected → retry
 
 **How**:
 - **Application-side**: HikariCP (Java), pgx pool (Go), SQLAlchemy pool (Python)
-- **External proxy**: PgBouncer (PG), ProxySQL (MySQL)
+- **External proxy**: PgBouncer, Pgpool-II
 - **Pool modes**:
   - *Session*: Connection held for entire session — wastes connections
   - *Transaction* (PgBouncer default): Returned to pool after COMMIT — most efficient
@@ -364,7 +362,7 @@ max_client_conn = 4000
 
 **Sources in databases**:
 1. **WAL/binlog**: Every write goes to WAL first, then data files (2x)
-2. **Double-write buffer (InnoDB)**: Writes go to doublewrite area first (3x)
+2. **Full-page writes (PG)**: After a checkpoint the first change to a page logs the whole page, not just the delta
 3. **Index updates**: Each secondary index update = another write
 4. **Page-level writes**: Changing 1 byte rewrites 8KB/16KB page
 5. **HOT updates vs cold updates in PG**: cold ones update all indexes
@@ -394,12 +392,10 @@ ORDER BY pg_relation_size(indexrelid) DESC;
 
 **How to estimate**:
 - Look at `pg_stat_database.blks_hit` vs `blks_read` — hit ratio should be >99%
-- Track buffer pool hit ratio in MySQL: `SHOW STATUS LIKE 'Innodb_buffer_pool_read%'`
 - Monitor cache miss rate; sudden increases signal working set exceeded RAM
 
 **Tuning**:
 - PostgreSQL `shared_buffers`: typically 25% of RAM
-- InnoDB `innodb_buffer_pool_size`: typically 70-80% of dedicated DB server RAM
 - The OS page cache also caches DB files (PG relies on this)
 
 **Real-world example**: A reporting query started failing nightly. Cause: a new "audit log" table grew to 200GB on a 64GB-RAM server. Each report scan evicted hot user data, then user-facing queries had cache misses, then bigger reports needed even more data, cascading. Fix: partition audit log by month, drop old partitions, archive to S3. Working set returned to RAM.
@@ -495,13 +491,13 @@ CREATE INDEX ON users (id) WHERE status = 'deleted';
 
 ---
 
-### Q18. Index Skip Scan (PostgreSQL)
+### Q18. Index Skip Scan
 
 **What**: When the leading column of a composite index has few distinct values, PG can "skip" through them to use the index even if the leading column isn't in WHERE.
 
 **Why useful**: Avoids creating redundant indexes when you have low-cardinality leading column.
 
-**Caveat**: True skip scan only landed in PostgreSQL 18 (2025). Prior versions emulated via Recursive CTE patterns ("loose index scan"). MySQL has had it since 5.6.
+**Caveat**: True skip scan only landed in PostgreSQL 18 (2025). Prior versions emulated via Recursive CTE patterns ("loose index scan").
 
 **How**:
 ```sql
@@ -533,10 +529,6 @@ CREATE INDEX ON users (tenant_id);
 
 -- Covering — fully covers query, no heap fetch
 CREATE INDEX ON users (tenant_id) INCLUDE (email, name);
-
--- MySQL InnoDB: any secondary index implicitly includes the PK
--- and you can "fake" INCLUDE by adding columns to the index key
-CREATE INDEX idx ON users (tenant_id, email, name);  -- but order in key matters
 ```
 
 **Trade-off**: Wider index = more storage, slower writes. Only INCLUDE columns frequently read together.
@@ -578,14 +570,14 @@ CREATE INDEX ON orders (created_at) WHERE refunded = false;
 **What**: A systematic approach to finding and fixing slow queries.
 
 **How (the playbook)**:
-1. **Identify**: Use slow query log (MySQL) or `pg_stat_statements` (PG)
+1. **Identify**: Use `pg_stat_statements`, or the slow query log (`log_min_duration_statement`)
    ```sql
    -- PostgreSQL: top 10 by total time
    SELECT query, calls, total_exec_time, mean_exec_time
    FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 10;
    ```
 2. **Reproduce**: Get parameters that trigger slowness
-3. **Explain**: `EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)` (PG); `EXPLAIN FORMAT=TREE` (MySQL 8)
+3. **Explain**: `EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)`
 4. **Look for**:
    - Sequential scans on large tables
    - Estimated rows ≠ actual rows (>10x)
@@ -635,8 +627,8 @@ Hash Join  (cost=0.0..123.0 rows=100 width=50) (actual time=2.1..15.3 rows=152 l
 **What**: Index pages that contain dead tuples or are partially empty. Inflates index size and slows scans.
 
 **Why it happens**:
-- PostgreSQL: deletes/updates leave dead tuples until VACUUM
-- InnoDB: page splits during random inserts leave half-empty pages
+- Deletes/updates leave dead tuples until VACUUM reclaims them
+- Random-order inserts split B-tree pages, leaving them half-empty
 
 **How to detect**:
 ```sql
@@ -649,8 +641,8 @@ SELECT pg_size_pretty(pg_relation_size('orders_idx'));
 ```
 
 **Remediation**:
-- **PostgreSQL**: `REINDEX INDEX CONCURRENTLY idx_name;` (PG 12+)
-- **MySQL InnoDB**: `OPTIMIZE TABLE` (rebuilds clustered + secondary indexes online in MySQL 5.6+)
+- `REINDEX INDEX CONCURRENTLY idx_name;` (PG 12+) — rebuilds without blocking writes
+- `pg_repack` when the table itself (not just the index) needs rewriting
 
 **Real-world example**: A heavily updated table had an index that grew from 2GB to 20GB over 6 months. Queries got slower. `REINDEX CONCURRENTLY` ran in 4 hours during off-peak — index back to 2GB, query latency dropped 80%.
 
@@ -673,9 +665,6 @@ SELECT pg_size_pretty(pg_relation_size('orders_idx'));
 -- PostgreSQL session settings (rarely needed)
 SET enable_nestloop = off;  -- force hash/merge
 SET enable_hashjoin = off;
-
--- MySQL: optimizer hints
-SELECT /*+ NO_HASH_JOIN(t1) */ ...
 ```
 
 **Pitfall**: Nested Loop on large outer (>10K rows) is usually a disaster unless inner has covering index.
@@ -711,7 +700,7 @@ WHERE r.amount > 100;
 
 ---
 
-### Q26. Index-Only Scans & Visibility Map (PostgreSQL)
+### Q26. Index-Only Scans & the Visibility Map
 
 **What**: A scan that retrieves data entirely from the index, never touching the heap.
 
@@ -814,33 +803,13 @@ SELECT s.indexrelname, pg_size_pretty(pg_relation_size(s.indexrelid))
 FROM pg_stat_user_indexes s
 WHERE s.idx_scan < 50  -- arbitrary low threshold
 ORDER BY pg_relation_size(s.indexrelid) DESC;
-
--- MySQL
-SELECT * FROM sys.schema_unused_indexes;
 ```
 
 **Real-world example**: An e-commerce DB had 20 indexes per table from years of "let's add an index" decisions. After audit: 6 unused, 4 redundant (covered by others). Dropping them reduced write latency 25% and table size by 15%.
 
 ---
 
-### Q30. InnoDB Clustered vs Non-Clustered Scan
-
-**What**: In InnoDB:
-- **Clustered scan**: Reads PK B-tree leaves, which contain full rows
-- **Secondary scan**: Walks secondary index, then for each entry does PK lookup (unless covering)
-
-**Why**: All InnoDB tables are clustered by PK; secondary indexes are non-clustered.
-
-**Performance implications**:
-- Secondary index lookup = 2 B-tree traversals (vs 1 in PG heap)
-- BUT secondary index leaf doesn't need updating when row physical location changes (because it references PK, not row ID)
-- Therefore: choose narrow PKs (BIGINT > UUID) to keep all indexes small
-
-**Real-world example**: Switching from VARCHAR(36) UUID PK to BIGINT auto-increment PK in MySQL reduced total index size by 60% across 8 secondary indexes. Read throughput up 40%.
-
----
-
-### Q31. Optimizing Multiple DISTINCT Operations
+### Q30. Optimizing Multiple DISTINCT Operations
 
 **What**: `SELECT COUNT(DISTINCT a), COUNT(DISTINCT b) FROM t` is expensive because DB must hash both columns separately.
 
@@ -871,7 +840,7 @@ FROM (
 
 ---
 
-### Q32. Functional vs Expression Indexes
+### Q31. Functional vs Expression Indexes
 
 **What**: An index on the result of an expression rather than a column directly.
 
@@ -886,16 +855,13 @@ SELECT * FROM users WHERE LOWER(email) = 'foo@bar.com';  -- seq scan!
 -- Good: functional index
 CREATE INDEX ON users (LOWER(email));
 SELECT * FROM users WHERE LOWER(email) = 'foo@bar.com';  -- uses index
-
--- MySQL 8+ supports too
-CREATE INDEX ON users ((LOWER(email)));  -- double parens required
 ```
 
 **Real-world example**: Case-insensitive email lookups at sign-in. Without functional index: seq scan 500ms. With: 0.5ms. Common gotcha — many teams have `email` index but query with `LOWER()`.
 
 ---
 
-### Q33. Deferred Index Build
+### Q32. Deferred Index Build
 
 **What**: Building an index AFTER bulk data load, not during.
 
@@ -925,7 +891,7 @@ ANALYZE orders;
 
 ---
 
-### Q34. Optimizing LIKE Patterns
+### Q33. Optimizing LIKE Patterns
 
 **What**: `LIKE 'foo%'` is index-able; `LIKE '%foo%'` and `LIKE '%foo'` are not (with B-tree).
 
@@ -949,16 +915,16 @@ CREATE EXTENSION pg_trgm;
 CREATE INDEX ON users USING GIN (email gin_trgm_ops);
 WHERE email LIKE '%foo%'  -- now uses GIN
 
--- 3. MySQL: full-text index
-CREATE FULLTEXT INDEX ON users (email);
-WHERE MATCH(email) AGAINST('foo');
+-- 3. PostgreSQL: full-text search for word-level matching
+CREATE INDEX ON users USING GIN (to_tsvector('simple', email));
+WHERE to_tsvector('simple', email) @@ to_tsquery('foo');
 ```
 
 **Real-world example**: Customer search by partial email/name. Trigram index on names (5GB) made `WHERE name ILIKE '%john%'` go from 8s to 30ms.
 
 ---
 
-### Q35. Functions in WHERE — Performance Cost
+### Q34. Functions in WHERE — Performance Cost
 
 **What**: `WHERE func(col) = X` typically prevents index use because the index stores `col`, not `func(col)`.
 
@@ -988,7 +954,7 @@ CREATE INDEX ON users (email_lower);
 
 ## SECTION 3: CONCURRENCY & LOCKING
 
-### Q36. PostgreSQL Row Lock Modes
+### Q35. PostgreSQL Row Lock Modes
 
 **What**: PostgreSQL has multiple row-level lock strengths chosen via `SELECT ... FOR ...`.
 
@@ -1020,19 +986,22 @@ FOR UPDATE SKIP LOCKED;
 
 ---
 
-### Q37. Lock Escalation
+### Q36. Lock Escalation
 
 **What**: Database upgrading many fine-grained locks (rows) to coarser ones (page, table) to save memory.
 
-**Why some DBs do it**: SQL Server escalates row locks → table locks at thresholds. MySQL and PostgreSQL do NOT escalate by default — but PG can take table locks for DDL.
+**Why some DBs do it**: SQL Server escalates row locks → table locks once a threshold is crossed, to cap the memory its lock manager spends. **PostgreSQL never escalates** — and the reason is architectural.
 
-**How PG/MySQL differ**:
-- **PostgreSQL**: No escalation; row locks stored in tuple headers (no memory cost per lock)
-- **InnoDB (MySQL)**: No escalation; uses bitmap-based lock structures
-- Both can still acquire intent locks at table level (LOCK TABLE)
+**Why PostgreSQL doesn't need to**: a row lock is recorded in the tuple header on the page itself (via `xmax`), not in a shared in-memory lock table. Locking 10 rows and locking 10 million rows cost the same amount of lock-manager memory: none. There is no pressure to trade granularity for memory.
+
+**What PostgreSQL does still take at table level**:
+- Explicit `LOCK TABLE`
+- Implicit DDL locks — `ALTER TABLE` takes `AccessExclusiveLock` and blocks *everything*, including `SELECT`
+- `SHARE UPDATE EXCLUSIVE` by `VACUUM` / `CREATE INDEX CONCURRENTLY`
 
 **Pitfalls**:
-- Long transactions hold many row locks → blocks vacuum, accumulates undo
+- No escalation ≠ no cost. Long transactions holding many row locks block `VACUUM` from reclaiming dead tuples → bloat
+- The real escalation risk in PG is the **lock queue**: one waiting `ALTER TABLE` blocks every query behind it, even readers
 - DDL takes implicit table locks: `ALTER TABLE` blocks everything
 
 **Real-world example**: A migration ran `UPDATE users SET ... WHERE ...` touching 5M rows in a single transaction. Held 5M row locks for 20 min, blocked autovacuum, caused dead tuples to balloon. Lesson: chunk updates in batches of 10K.
@@ -1055,7 +1024,7 @@ END $$;
 
 ---
 
-### Q38. Deadlock Scenarios & Prevention
+### Q37. Deadlock Scenarios & Prevention
 
 **What**: Two transactions each hold a lock the other needs → DB kills one (the "victim").
 
@@ -1080,9 +1049,6 @@ T2: UPDATE accounts SET balance = balance + 50  WHERE id = 1;  -- waits for T1
 -- PostgreSQL
 SHOW deadlock_timeout;  -- default 1s
 -- Logs deadlocks at log_min_messages = WARNING
-
--- MySQL
-SHOW ENGINE INNODB STATUS;  -- LATEST DETECTED DEADLOCK section
 ```
 
 **Real-world example**: A payment service had 50 deadlocks/day. Cause: `transfer(from, to)` locked in argument order. Sorting `(min, max)` then locking eliminated all deadlocks.
@@ -1099,7 +1065,7 @@ db.execute("UPDATE accounts SET ... WHERE id IN (?,?)", ids[0], ids[1])
 
 ---
 
-### Q39. Blocking Queries — Identify & Resolve
+### Q38. Blocking Queries — Identify & Resolve
 
 **What**: A query waiting on a lock held by another transaction.
 
@@ -1117,11 +1083,6 @@ FROM pg_stat_activity blocked
 JOIN pg_stat_activity blocking ON blocking.pid = ANY(pg_blocking_pids(blocked.pid));
 ```
 
-```sql
--- MySQL
-SELECT * FROM performance_schema.data_lock_waits;
-```
-
 **Resolve**:
 - Identify holder, kill if hung: `SELECT pg_terminate_backend(pid);`
 - Common cause: idle-in-transaction connection
@@ -1131,7 +1092,7 @@ SELECT * FROM performance_schema.data_lock_waits;
 
 ---
 
-### Q40. Shared vs Exclusive Locks
+### Q39. Shared vs Exclusive Locks
 
 **What**:
 - **Shared (S)**: Multiple readers can hold. Blocks exclusive.
@@ -1153,19 +1114,18 @@ SELECT * FROM performance_schema.data_lock_waits;
 
 ---
 
-### Q41. Sequences & Concurrency
+### Q40. Sequences & Concurrency
 
 **What**: Auto-incrementing counters for surrogate PKs.
 
 **How they work**:
 - PostgreSQL `SEQUENCE`: lockless cache (`CACHE 100`), backed by a relfile
-- MySQL `AUTO_INCREMENT`: in-memory counter per table, persisted at intervals
+- `BIGSERIAL` / `GENERATED AS IDENTITY` are sequences underneath — same semantics
 
 **Pitfalls**:
 1. **Gaps**: Rollback consumes a number — sequences are non-transactional
 2. **Replication**: Replicas have separate sequences (PG); use logical replication carefully
-3. **Restart on crash**: Both can advance after crash recovery
-4. **`AUTO_INCREMENT` reset by ALTER**: Resets to MAX + 1
+3. **Restart on crash**: Cached-but-unused values are lost, so the counter jumps forward
 
 **Best practices**:
 - Don't rely on contiguous IDs (gaps exist)
@@ -1176,47 +1136,65 @@ SELECT * FROM performance_schema.data_lock_waits;
 
 ---
 
-### Q42. InnoDB Gap Locks
+### Q41. Preventing Write-Side Phantoms — Predicate Locks, Not Gap Locks
 
-**What**: A lock on the "gap" between index records, preventing inserts into that range.
+**The problem both solve**: you `SELECT ... WHERE status = 'pending' FOR UPDATE`, act on the result, and commit — but another transaction inserts a *new* pending row in the middle. Your logic silently missed it. That's a write-side phantom.
 
-**Why they exist**: To prevent phantom reads at REPEATABLE READ isolation.
+**How PostgreSQL handles it — predicate locks (SSI)**:
 
-**How**:
+PostgreSQL has **no gap locks**. It cannot lock a row that doesn't exist yet. Instead, at `SERIALIZABLE` it tracks *predicates* — which ranges each transaction read — using SIREAD locks, and aborts a transaction at commit time if a concurrent write invalidated what it read.
+
 ```sql
--- T1: SELECT * FROM t WHERE id BETWEEN 10 AND 20 FOR UPDATE;
--- Now T2 cannot INSERT a row with id=15 — blocked by gap lock
-
--- Surprising case: gap locks on unique index can block inserts even on existing values
+BEGIN ISOLATION LEVEL SERIALIZABLE;
+SELECT * FROM t WHERE id BETWEEN 10 AND 20;   -- read tracked, nothing blocked
+-- concurrent session inserts id=15 and commits — it is NOT blocked
+COMMIT;  -- ERROR: could not serialize access due to read/write dependencies
 ```
 
-**Trade-offs**:
-- ✅ Prevents phantoms at REPEATABLE READ
-- ❌ Can cause unexpected deadlocks
-- ❌ Limits concurrent inserts in same range
+**This is optimistic, and the consequence is non-negotiable**: `SERIALIZABLE` transactions can fail at `COMMIT` with SQLSTATE `40001`. **Your application must catch it and retry the whole transaction.** Code that doesn't retry is broken under load, not merely slow.
 
-**Disabling**: `SET tx_isolation = 'READ-COMMITTED';` — disables gap locks (most production OLTP uses this).
+**At READ COMMITTED and REPEATABLE READ** (the common cases), PG gives you no phantom protection on the write side at all. Your options:
+- `SELECT ... FOR UPDATE` only locks rows that already exist — useless against inserts
+- Lock the *parent* row the range hangs off (e.g. the account, not its transactions) — the usual pragmatic fix
+- Use an advisory lock keyed to the range
+- Add a `UNIQUE` constraint or `EXCLUDE` constraint so the DB rejects the conflicting insert outright — the most robust answer
 
-**Real-world example**: A team reported sporadic deadlocks on inserts. Root cause: REPEATABLE READ + gap locks on a secondary index. Switching to READ COMMITTED eliminated the issue. (MySQL default is REPEATABLE READ; most teams should change to READ COMMITTED for higher throughput.)
+**The contrast** (MySQL/InnoDB, since the concept is usually taught there): InnoDB locks the gap between index records pessimistically, so the conflicting insert *blocks* rather than the reader aborting. It prevents the phantom without application retry logic, at the cost of lower insert concurrency and surprising deadlocks.
+
+| | PostgreSQL (SSI) | InnoDB (gap locks) |
+|---|---|---|
+| Strategy | Optimistic — detect at commit | Pessimistic — block the writer |
+| Conflicting insert | Succeeds | Blocks |
+| Failure mode | Reader gets `40001`, must retry | Writer waits, may deadlock |
+| App requirement | **Retry loop mandatory** | None |
+| Active at | SERIALIZABLE only | REPEATABLE READ (the InnoDB default) |
+
+**Real-world example**: A team ported a booking system from MySQL to PostgreSQL and kept the "SELECT overlapping bookings, then INSERT" pattern. Under InnoDB's REPEATABLE READ, gap locks had quietly serialized it for years. On PG at READ COMMITTED nothing blocked, and double-bookings appeared within a week. The fix was not `SERIALIZABLE` — it was an `EXCLUDE USING gist (room_id WITH =, during WITH &&)` constraint, which makes the overlap impossible at any isolation level and needs no retry logic.
 
 ---
 
-### Q43. Page vs Row Locks
+### Q42. Page vs Row Locks
 
 **What**:
 - **Row lock**: Lock individual rows. Fine-grained, high concurrency.
-- **Page lock**: Lock an entire page (8KB/16KB). Coarser, less metadata.
+- **Page lock**: Lock an entire page (8KB in PG). Coarser, less metadata.
 
-**When DBs use which**:
-- **PostgreSQL**: Row locks via tuple headers (no separate lock table) + page-level for VACUUM
-- **InnoDB**: Row locks via lock structures + gap/next-key locks
-- **MyISAM (legacy)**: Table locks only — one writer at a time
+**How PostgreSQL does it**: row locks live in the tuple header (`xmax`) on the page — there is no separate lock table for them, so they cost no shared memory and never escalate (see Q36). Short-lived page-level locks exist internally, but only as implementation detail — `VACUUM`, index maintenance and buffer management take them. You don't request page locks and can't see them in `pg_locks` as row entries.
 
-**Real-world example**: Migration from MyISAM to InnoDB: write concurrency went from 50 → 5000 QPS purely from row-level locking.
+**What you can actually observe**:
+```sql
+-- Row-level conflicts show as transactionid waits, not per-row lock rows
+SELECT locktype, relation::regclass, mode, granted
+FROM pg_locks WHERE NOT granted;
+```
+
+**Why the distinction matters**: because PG stores row locks on the page, a transaction that locks millions of rows dirties millions of pages — every one needs rewriting to the WAL and re-fsyncing. That's the real cost of a giant `SELECT FOR UPDATE`, not lock-manager memory.
+
+**Real-world example**: A nightly job ran `SELECT ... FOR UPDATE` over 8M rows to "reserve" them. No lock escalation occurred, as expected — but the job dirtied the entire table's pages writing `xmax` values, generating 30GB of WAL and saturating replication. Rewriting it to claim rows in 10K batches with `FOR UPDATE SKIP LOCKED` cut WAL to near nothing.
 
 ---
 
-### Q44. PostgreSQL MVCC Internals
+### Q43. PostgreSQL MVCC Internals
 
 **What**: Multi-Version Concurrency Control. Each row has version metadata; readers see a consistent snapshot.
 
@@ -1237,7 +1215,7 @@ SELECT * FROM performance_schema.data_lock_waits;
 
 ---
 
-### Q45. Transaction Isolation Levels — Trade-offs
+### Q44. Transaction Isolation Levels — Trade-offs
 
 **What**: Four standard levels controlling what anomalies are visible.
 
@@ -1245,18 +1223,16 @@ SELECT * FROM performance_schema.data_lock_waits;
 |-------|------------|---------------------|----------|
 | READ UNCOMMITTED | Highest | None | Rarely used; PG treats as READ COMMITTED |
 | READ COMMITTED | High | Dirty | OLTP default for most |
-| REPEATABLE READ | Medium | Dirty, Non-repeat (and phantom in PG/InnoDB) | Reports needing consistency |
+| REPEATABLE READ | Medium | Dirty, Non-repeat (and phantom in PG) | Reports needing consistency |
 | SERIALIZABLE | Lowest | All | Financial settlement |
 
-**PG vs MySQL defaults**:
-- PostgreSQL default: READ COMMITTED
-- MySQL/InnoDB default: REPEATABLE READ (uses snapshot isolation, prevents phantoms)
+**Defaults**: PostgreSQL defaults to READ COMMITTED — note this is *weaker* than the MySQL/InnoDB default of REPEATABLE READ, so code ported from MySQL silently loses snapshot stability across statements.
 
 **Real-world example**: A balance check + transfer needs REPEATABLE READ or higher. READ COMMITTED would let two transfers each see the same starting balance and overdraft. SERIALIZABLE in PG uses SSI (Serializable Snapshot Isolation) — detects conflicts and aborts; app must retry.
 
 ---
 
-### Q46. Lock Wait Timeout
+### Q45. Lock Wait Timeout
 
 **What**: How long a query waits for a lock before failing.
 
@@ -1265,17 +1241,18 @@ SELECT * FROM performance_schema.data_lock_waits;
 -- PostgreSQL: per-session
 SET lock_timeout = '5s';
 
--- MySQL: per-session
-SET innodb_lock_wait_timeout = 5;  -- default 50 seconds!
+-- Also bound how long a statement may run at all
+SET statement_timeout = '30s';
 ```
 
-**Why important**: Default 50s in MySQL is way too long for OLTP. A blocking transaction can stall an entire app.
+**Why important**: PostgreSQL's `lock_timeout` defaults to 0 — *wait forever*. A blocking transaction can stall an entire app indefinitely unless you set this.
 
-**Real-world example**: API requests timing out after 30s, but DB lock waits were 50s — connections piling up. Setting `innodb_lock_wait_timeout = 5` made failures explicit and fast.
+**Real-world example**: API requests timed out after 30s while DB lock waits queued forever — connections piled up until the pool was exhausted. Setting `lock_timeout = '5s'` made failures explicit and fast.
 
 ---
 
-### Q47. Optimistic vs Pessimistic — Picking with Examples
+### Q46. Optimistic vs Pessimistic — Picking with Examples
+
 
 (See Q10 for general explanation.) Extended decision matrix:
 
@@ -1294,21 +1271,21 @@ SET innodb_lock_wait_timeout = 5;  -- default 50 seconds!
 
 ---
 
-### Q48. Phantom Rows Across Isolation Levels
+### Q47. Phantom Rows Across Isolation Levels
 
 **What**: New rows appearing in a range query during a transaction.
 
 **How each level handles**:
 - READ COMMITTED: phantoms appear freely
-- REPEATABLE READ (PG, InnoDB): snapshot prevents phantoms (uses MVCC)
+- REPEATABLE READ (PG): snapshot prevents phantoms (uses MVCC)
 - REPEATABLE READ (strict SQL standard): doesn't prevent phantoms (uses 2PL)
 - SERIALIZABLE: prevents all anomalies
 
-**Real-world example**: Standard SQL spec REPEATABLE READ allows phantoms; InnoDB and PG don't (because they use snapshot, not strict 2PL). Don't assume cross-DB consistency.
+**Real-world example**: The SQL spec allows phantoms at REPEATABLE READ; PostgreSQL does not, because it uses snapshots rather than strict 2PL. Don't assume the spec's guarantees match what PG actually gives you.
 
 ---
 
-### Q49. Detecting & Monitoring Lock Contention
+### Q48. Detecting & Monitoring Lock Contention
 
 **How**:
 ```sql
@@ -1320,10 +1297,6 @@ GROUP BY 1,2 ORDER BY count DESC;
 
 -- pg_locks gives detail
 SELECT * FROM pg_locks WHERE NOT granted;
-
--- MySQL
-SELECT * FROM performance_schema.data_lock_waits;
-SHOW ENGINE INNODB STATUS\G  -- TRANSACTIONS section
 ```
 
 **Metrics to alert on**:
@@ -1336,7 +1309,7 @@ SHOW ENGINE INNODB STATUS\G  -- TRANSACTIONS section
 
 ---
 
-### Q50. PostgreSQL Advisory Locks
+### Q49. PostgreSQL Advisory Locks
 
 **What**: Application-level locks identified by integer keys; database mediates them but doesn't enforce row/table semantics.
 
@@ -1362,7 +1335,7 @@ SELECT pg_try_advisory_lock(12345);  -- true if acquired
 
 ## SECTION 4: TRANSACTIONS & ACID
 
-### Q51. ACID Properties — Why Each Matters
+### Q50. ACID Properties — Why Each Matters
 
 **What**:
 - **Atomicity**: All-or-nothing. Partial failures roll back.
@@ -1379,7 +1352,7 @@ SELECT pg_try_advisory_lock(12345);  -- true if acquired
 - D: fsync of WAL before COMMIT returns
 
 **Trade-offs senior engineers know**:
-- True D requires `synchronous_commit = on` (PG) or `innodb_flush_log_at_trx_commit = 1` (MySQL) — slower
+- True D requires `synchronous_commit = on` — slower, and `off` risks losing recent commits on crash
 - Some workloads can accept "loose D" — accept losing last second of commits for 10x throughput
 - BASE (eventually consistent) is alternative for global scale (DynamoDB, Cassandra)
 
@@ -1387,7 +1360,8 @@ SELECT pg_try_advisory_lock(12345);  -- true if acquired
 
 ---
 
-### Q52. Anomalies & Isolation Levels (Recap)
+### Q51. Anomalies & Isolation Levels (Recap)
+
 
 (Covered in Q11 and Q45.) Key reference table:
 
@@ -1395,7 +1369,7 @@ SELECT pg_try_advisory_lock(12345);  -- true if acquired
 |-----------|-----------|------------------|
 | Dirty Read | Read uncommitted | READ COMMITTED+ |
 | Non-Repeatable Read | Same row read 2x differs | REPEATABLE READ+ |
-| Phantom Read | Same range query, more rows | REPEATABLE READ (PG/InnoDB) or SERIALIZABLE (strict) |
+| Phantom Read | Same range query, more rows | REPEATABLE READ (PG) or SERIALIZABLE (strict) |
 | Write Skew | Two TX both check + write, breaking invariant | SERIALIZABLE |
 
 **Write skew example** (subtle, often missed):
@@ -1412,7 +1386,8 @@ SELECT pg_try_advisory_lock(12345);  -- true if acquired
 
 ---
 
-### Q53. The Four Standard Isolation Levels
+### Q52. The Four Standard Isolation Levels
+
 
 (See Q11, Q45.)
 
@@ -1421,13 +1396,9 @@ SELECT pg_try_advisory_lock(12345);  -- true if acquired
 - REPEATABLE READ = Snapshot Isolation (prevents phantoms)
 - SERIALIZABLE = Serializable Snapshot Isolation (SSI) — adds conflict detection
 
-**MySQL specifics**:
-- REPEATABLE READ uses MVCC for consistent reads + next-key locks for write-side phantom prevention
-- Default level; recommended to change to READ COMMITTED for less locking
-
 ---
 
-### Q54. Snapshot Isolation vs Serializable Snapshot Isolation
+### Q53. Snapshot Isolation vs Serializable Snapshot Isolation
 
 **What**:
 - **SI**: All reads return a consistent snapshot at TX start
@@ -1443,7 +1414,7 @@ SELECT pg_try_advisory_lock(12345);  -- true if acquired
 
 ---
 
-### Q55. Savepoints
+### Q54. Savepoints
 
 **What**: Nested rollback points within a transaction.
 
@@ -1467,13 +1438,13 @@ COMMIT;
 
 ---
 
-### Q56. Implicit vs Explicit Transactions
+### Q55. Implicit vs Explicit Transactions
 
 **What**:
 - **Implicit (autocommit)**: Each statement is its own transaction
 - **Explicit**: Wrapped in `BEGIN ... COMMIT`
 
-**Default**: Both PG and MySQL default to autocommit ON.
+**Default**: PostgreSQL defaults to autocommit ON.
 
 **Pitfall**: Most ORMs disable autocommit and manage transactions. Mixing modes leads to "transaction not closed" issues.
 
@@ -1481,12 +1452,12 @@ COMMIT;
 
 ---
 
-### Q57. ROLLBACK Implications
+### Q56. ROLLBACK Implications
 
 **What**: Undoes all transaction changes.
 
 **Why important**:
-- Rollback isn't free: PG keeps the dead tuples for VACUUM; InnoDB uses undo log
+- Rollback isn't free: PG leaves the aborted row versions behind as dead tuples for VACUUM to reclaim (unlike engines that undo in place)
 - Long-running rollback can take as long as the original work
 - Sequences are NOT rolled back — IDs are consumed even if you ROLLBACK
 
@@ -1494,11 +1465,10 @@ COMMIT;
 
 ---
 
-### Q58. Long-Running Transactions — Hidden Costs
+### Q57. Long-Running Transactions — Hidden Costs
 
 **Why bad**:
 - **PostgreSQL**: Blocks VACUUM from cleaning dead tuples → bloat
-- **MySQL**: Pins undo log → undo log grows → can fill disk
 - Holds locks longer → blocks others
 - Holds the snapshot → must keep old versions of changed rows
 
@@ -1518,7 +1488,7 @@ SET idle_in_transaction_session_timeout = '5min';
 
 ---
 
-### Q59. WAL — Why It's Critical
+### Q58. WAL — Why It's Critical
 
 **What**: Write-Ahead Log. All changes written to a sequential log BEFORE updating data files.
 
@@ -1542,7 +1512,7 @@ SET idle_in_transaction_session_timeout = '5min';
 
 ---
 
-### Q60. Consistency vs Isolation in ACID
+### Q59. Consistency vs Isolation in ACID
 
 **What**:
 - **Isolation**: Transactions don't see each other's intermediate state
@@ -1554,7 +1524,7 @@ SET idle_in_transaction_session_timeout = '5min';
 
 ---
 
-### Q61. Distributed Transactions
+### Q60. Distributed Transactions
 
 **What**: A transaction spanning multiple DBs/services.
 
@@ -1589,12 +1559,12 @@ except:
 
 ---
 
-### Q62. Autocommit Mode — Gotchas
+### Q61. Autocommit Mode — Gotchas
 
 **What**: Each statement auto-commits unless inside a transaction.
 
 **Gotchas**:
-1. **DDL implicit commit (MySQL)**: `CREATE TABLE` commits the open transaction
+1. **DDL is transactional in PG**: unlike most engines, `CREATE TABLE` can be rolled back — don't carry over the assumption that DDL auto-commits
 2. **No transaction safety in batch scripts**: A loop of INSERTs with autocommit means each row is its own COMMIT — 100x slower than batched
 3. **psql `\copy` is autocommitted**: One COMMIT after the whole load — different from line-by-line INSERTs
 
@@ -1614,7 +1584,7 @@ with conn:  # implicit transaction
 
 ## SECTION 5: REPLICATION & HIGH AVAILABILITY
 
-### Q63. Synchronous vs Asynchronous Replication
+### Q62. Synchronous vs Asynchronous Replication
 
 **What**:
 - **Async**: Primary commits, then ships WAL/binlog to replicas (default)
@@ -1635,13 +1605,11 @@ synchronous_commit = on  -- wait for at least 1
 -- or 'remote_apply' (replica must apply, not just receive)
 ```
 
-**MySQL**: Semi-sync via `rpl_semi_sync_master_enabled`
-
 **Real-world example**: A fintech ran sync replication for the primary write region — RPO=0 mandate. For analytics replicas, used async (10-second lag acceptable). Mixed-mode is common.
 
 ---
 
-### Q64. Read Replicas — Use Cases
+### Q63. Read Replicas — Use Cases
 
 **What**: Replicas accepting only SELECT queries, served from replicated data.
 
@@ -1672,7 +1640,7 @@ else:
 
 ---
 
-### Q65. Replication Lag — Causes & Implications
+### Q64. Replication Lag — Causes & Implications
 
 **What**: Time delta between primary commit and replica apply.
 
@@ -1690,13 +1658,10 @@ SELECT pg_wal_lsn_diff(pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn());
 
 -- Or in seconds
 SELECT EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp()));
-
--- MySQL
-SHOW REPLICA STATUS\G  -- Seconds_Behind_Source
 ```
 
 **Mitigations**:
-- Parallel replication (PG 10+: `recovery_min_apply_delay`, MySQL parallel replication threads)
+- Tune replay: `max_parallel_workers`, and avoid `recovery_min_apply_delay` unless you want a deliberate delay
 - Smaller transactions
 - Don't run heavy queries on replicas without `hot_standby_feedback`
 
@@ -1704,7 +1669,7 @@ SHOW REPLICA STATUS\G  -- Seconds_Behind_Source
 
 ---
 
-### Q66. PostgreSQL Streaming Replication
+### Q65. PostgreSQL Streaming Replication
 
 **What**: Primary sends WAL records to replicas in real-time over TCP.
 
@@ -1736,7 +1701,7 @@ systemctl start postgresql
 
 ---
 
-### Q67. Logical vs Physical Replication
+### Q66. Logical vs Physical Replication
 
 **What**:
 - **Physical**: Replicates WAL byte-for-byte; replica is exact copy
@@ -1767,7 +1732,7 @@ CREATE SUBSCRIPTION sub1
 
 ---
 
-### Q68. Split Brain — Causes & Prevention
+### Q67. Split Brain — Causes & Prevention
 
 **What**: Two nodes both think they're primary, both accept writes → data divergence.
 
@@ -1786,7 +1751,7 @@ CREATE SUBSCRIPTION sub1
 
 ---
 
-### Q69. Failover, Failback, Switchover
+### Q68. Failover, Failback, Switchover
 
 **What**:
 - **Failover**: Unplanned promotion of a replica due to primary failure
@@ -1807,26 +1772,24 @@ CREATE SUBSCRIPTION sub1
 
 ---
 
-### Q70. Semi-Synchronous Replication
+### Q69. Semi-Synchronous Replication
 
 **What**: Primary waits for replica to receive (but not necessarily apply) WAL before COMMIT.
 
 **Why**: Sweet spot — better durability than async, lower latency than full sync.
 
-**MySQL**:
-```sql
-INSTALL PLUGIN rpl_semi_sync_master SONAME 'semisync_master.so';
-SET GLOBAL rpl_semi_sync_master_enabled = 1;
-SET GLOBAL rpl_semi_sync_master_timeout = 1000;  -- ms before falling back to async
-```
+**PostgreSQL**: `synchronous_commit = remote_write` — the replica has received and written the WAL to its OS, but not yet fsynced it.
 
-**PostgreSQL**: `synchronous_commit = remote_write` (received but not flushed on replica)
+```ini
+synchronous_commit = remote_write
+synchronous_standby_names = 'ANY 1 (replica1, replica2)'
+```
 
 **Real-world example**: E-commerce checkout used semi-sync — guaranteed replica had the row before client got "order confirmed." Loss window <1s vs minutes with async.
 
 ---
 
-### Q71. Replication Conflicts & Resolution
+### Q70. Replication Conflicts & Resolution
 
 **What**: When logical replication can't apply a change (FK violation, missing row, schema mismatch).
 
@@ -1848,7 +1811,7 @@ SELECT * FROM pg_stat_subscription_stats;
 
 ---
 
-### Q72. WAL Archiving for Backup/PITR
+### Q71. WAL Archiving for Backup/PITR
 
 **What**: Continuously archiving WAL files to durable storage (S3, NFS).
 
@@ -1871,50 +1834,52 @@ recovery_target_time = '2024-01-15 14:30:00'
 
 ---
 
-### Q73. MySQL Binary Log Formats
+### Q72. Replica Position Tracking — LSN, Timelines and `pg_rewind`
 
-**What**: How MySQL records changes for replication.
+**What**: PostgreSQL identifies every byte of WAL by a **LSN** (Log Sequence Number, e.g. `3/4F2A08B0`) and every promotion lineage by a **timeline ID**. Together they answer "what has this replica applied, and is it even on the same history as the primary?"
 
-**Formats**:
-1. **STATEMENT**: Logs SQL statements. Compact but non-deterministic (NOW(), RAND() can diverge)
-2. **ROW**: Logs row before+after images. Larger but always deterministic. Default in 5.7+.
-3. **MIXED**: Statement unless non-deterministic, then ROW.
+**Why it matters**: this is what makes failover safe or unsafe.
+- A replica's position is `pg_last_wal_replay_lsn()` — directly comparable to the primary's
+- On promotion the new primary increments its **timeline** (1 → 2). Old replicas following timeline 1 must be told to follow the new one (`recovery_target_timeline = 'latest'`)
+- A demoted old primary usually has WAL the new one never saw — **diverged history**. It cannot simply reattach
 
-**Recommendation**: ROW for safety; MIXED as backward-compat.
-
-**Trade-off**: ROW logs can be huge — a single `UPDATE WHERE 1=1` logs every row. Use binlog_row_image=MINIMAL to reduce size.
-
-**Real-world example**: A statement-based replica diverged because `INSERT ... NOW()` differed by microseconds. Switched to ROW — diverged once, never again.
-
----
-
-### Q74. GTID-Based Replication
-
-**What**: Global Transaction IDs uniquely identify every transaction across the topology.
-
-**Why**:
-1. **Easy failover**: Replica knows exactly which TX it has applied
-2. **Topology changes**: Re-pointing replicas is trivial (`MASTER_AUTO_POSITION = 1`)
-3. **No "find the correct binlog position" pain**
-
-**How (MySQL)**:
+**How**:
 ```sql
--- my.cnf
-gtid_mode = ON
-enforce_gtid_consistency = ON
-log_replica_updates = ON
+-- On the primary: what each replica has confirmed
+SELECT application_name, state,
+       sent_lsn, write_lsn, flush_lsn, replay_lsn,
+       pg_wal_lsn_diff(sent_lsn, replay_lsn) AS replay_bytes_behind
+FROM pg_stat_replication;
 
--- After failover, on new replica:
-CHANGE REPLICATION SOURCE TO SOURCE_HOST='new-primary', SOURCE_AUTO_POSITION=1;
+-- On a replica: current position and timeline
+SELECT pg_last_wal_replay_lsn(), timeline_id FROM pg_control_checkpoint();
 ```
 
-**Real-world example**: Pre-GTID, failover required noting the binlog position on the old primary and configuring replicas with that exact position. Took 20 minutes and was error-prone. Post-GTID: 2 commands, 30 seconds.
+```bash
+# Reattaching a diverged ex-primary WITHOUT a full base backup:
+# rewinds it to the fork point, then it can follow the new primary
+pg_rewind --target-pgdata=/var/lib/postgresql/data \
+          --source-server="host=new-primary user=postgres"
+# Requires wal_log_hints=on (or data checksums) on the target — set it BEFORE you need it
+```
+
+**The gotcha**: `pg_rewind` only works if `wal_log_hints = on` or checksums were enabled at `initdb`. Neither is the default. Teams discover this during their first failover, when the only remaining option is a multi-hour `pg_basebackup` of a multi-TB cluster.
+
+**Replication slots** are the other half: they stop the primary recycling WAL a replica hasn't consumed. Essential for correctness, dangerous if unmonitored — a dead replica with a live slot fills the primary's disk.
+
+```sql
+SELECT slot_name, active,
+       pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) AS retained_wal
+FROM pg_replication_slots ORDER BY 3 DESC;
+```
+
+**Real-world example**: A failover promoted a replica, and the old primary was reattached without `pg_rewind` — it had 40MB of WAL the new primary never received. It started up, silently diverged, and served stale reads for two days before checksum mismatches surfaced. Correct sequence: fence the old primary, `pg_rewind` against the new one, then reattach. Set `wal_log_hints = on` on day one; it costs almost nothing and is the difference between a 2-minute and a 6-hour recovery.
 
 ---
 
 ## SECTION 6: MAINTENANCE & ADMINISTRATION
 
-### Q75. PostgreSQL VACUUM — Why & How
+### Q73. PostgreSQL VACUUM — Why & How
 
 **What**: Reclaims space from dead tuples; updates visibility map; prevents XID wraparound.
 
@@ -1944,7 +1909,7 @@ VACUUM FREEZE orders;
 
 ---
 
-### Q76. Autovacuum Tuning
+### Q74. Autovacuum Tuning
 
 **What**: Background daemon that runs VACUUM automatically based on thresholds.
 
@@ -1975,7 +1940,7 @@ ALTER TABLE orders SET (
 
 ---
 
-### Q77. Online Schema Migrations — Large Tables
+### Q75. Online Schema Migrations — Large Tables
 
 **What**: Adding/altering columns on multi-billion-row tables without downtime.
 
@@ -1997,8 +1962,6 @@ ALTER TABLE orders ADD COLUMN status TEXT NOT NULL DEFAULT 'pending';
 
 **2. Tools that do it online**:
 - **pg_repack**: rebuilds table with minimal locking
-- **pt-online-schema-change** (MySQL): trigger-based copy
-- **gh-ost** (MySQL): binlog-based copy
 - **Postgres squitch/sqitch + careful CONCURRENTLY** for indexes
 
 **3. Manual safe pattern**:
@@ -2021,7 +1984,7 @@ ALTER TABLE orders ALTER COLUMN status SET NOT NULL;  -- can now skip full scan 
 
 ---
 
-### Q78. Table Reorganization
+### Q76. Table Reorganization
 
 **What**: Rewriting a table to reclaim space, change order, or change storage parameters.
 
@@ -2034,9 +1997,6 @@ ALTER TABLE orders ALTER COLUMN status SET NOT NULL;  -- can now skip full scan 
 ```sql
 -- PG: pg_repack (online, no long lock)
 pg_repack -t orders mydb
-
--- MySQL: OPTIMIZE TABLE (online in 5.6+ for InnoDB)
-OPTIMIZE TABLE orders;
 ```
 
 **Trade-off**: Doubles disk space temporarily.
@@ -2045,7 +2005,7 @@ OPTIMIZE TABLE orders;
 
 ---
 
-### Q79. Detecting & Reducing Bloat
+### Q77. Detecting & Reducing Bloat
 
 **Detect**:
 ```sql
@@ -2054,16 +2014,12 @@ CREATE EXTENSION pgstattuple;
 SELECT * FROM pgstattuple_approx('orders');
 
 -- Or use the bloat estimation queries from pgexperts/check_postgres
-
--- MySQL
-SELECT table_name, data_free
-FROM information_schema.tables
-WHERE table_schema = 'mydb' AND data_free > 1024*1024*100;
 ```
 
 **Reduce**:
-- PG: VACUUM (mark reusable) → if not enough, pg_repack
-- MySQL: OPTIMIZE TABLE
+- `VACUUM` marks space reusable (does not return it to the OS)
+- `VACUUM FULL` returns it but takes `AccessExclusiveLock` — avoid in production
+- `pg_repack` when you need the space back without the lock
 
 **Prevention**:
 - Tune autovacuum
@@ -2074,7 +2030,7 @@ WHERE table_schema = 'mydb' AND data_free > 1024*1024*100;
 
 ---
 
-### Q80. Safely Dropping a Column
+### Q78. Safely Dropping a Column
 
 **What**: Removing a column from a large table.
 
@@ -2085,15 +2041,16 @@ WHERE table_schema = 'mydb' AND data_free > 1024*1024*100;
 ALTER TABLE orders DROP COLUMN old_status;
 ```
 
-**The careful way (MySQL)**:
+**The caveats that bite** (PG):
 ```sql
--- INSTANT in MySQL 8.0.29+ for some types
-ALTER TABLE orders DROP COLUMN old_status, ALGORITHM=INSTANT;
+-- 1. It is metadata-only and fast, but still needs AccessExclusiveLock.
+--    A long-running SELECT will make it QUEUE, and everything queues behind it.
+SET lock_timeout = '3s';  -- fail fast instead of blocking the whole table
+ALTER TABLE orders DROP COLUMN old_status;
 
--- Otherwise INPLACE rebuilds the table
-ALTER TABLE orders DROP COLUMN old_status, ALGORITHM=INPLACE, LOCK=NONE;
-
--- Best: use gh-ost or pt-online-schema-change
+-- 2. Space is NOT reclaimed until a rewrite
+SELECT pg_size_pretty(pg_total_relation_size('orders'));  -- unchanged after DROP
+pg_repack -t orders mydb                                  -- actually reclaims it
 ```
 
 **Senior engineer pattern — staged removal**:
@@ -2106,7 +2063,7 @@ ALTER TABLE orders DROP COLUMN old_status, ALGORITHM=INPLACE, LOCK=NONE;
 
 ---
 
-### Q81. Backup Types
+### Q79. Backup Types
 
 **What**:
 - **Full**: Entire DB copy
@@ -2128,13 +2085,12 @@ ALTER TABLE orders DROP COLUMN old_status, ALGORITHM=INPLACE, LOCK=NONE;
 
 **Tools**:
 - pgBackRest, Barman, WAL-G (PG)
-- Percona XtraBackup, mysqldump, MyDumper (MySQL)
 
 **Real-world example**: A team did full backups nightly + WAL archiving. Disk filled → backup failed silently for 2 weeks. Always alert on backup success, not just failure. Test restores monthly.
 
 ---
 
-### Q82. Point-in-Time Recovery (PITR)
+### Q80. Point-in-Time Recovery (PITR)
 
 **What**: Restore database to any specific timestamp.
 
@@ -2158,7 +2114,7 @@ recovery_target_time = '2024-01-15 14:30:00'
 
 ---
 
-### Q83. Health Monitoring & Alerts
+### Q81. Health Monitoring & Alerts
 
 **Senior-engineer baseline metrics**:
 
@@ -2187,7 +2143,7 @@ recovery_target_time = '2024-01-15 14:30:00'
 
 ---
 
-### Q84. Slow Query Logs
+### Q82. Slow Query Logs
 
 **What**: Log of queries exceeding a duration threshold.
 
@@ -2198,14 +2154,6 @@ log_min_duration_statement = 100ms  # log anything slower
 log_statement = 'mod'  # log all DDL/DML
 log_temp_files = 0  # log temp file creation
 log_lock_waits = on
-```
-
-**Configure (MySQL)**:
-```ini
-slow_query_log = ON
-slow_query_log_file = /var/log/mysql/slow.log
-long_query_time = 0.1
-log_queries_not_using_indexes = ON  # warning: noisy
 ```
 
 **Even better — pg_stat_statements** (PG):
@@ -2219,7 +2167,7 @@ ORDER BY total_exec_time DESC LIMIT 20;
 
 ---
 
-### Q85. Major vs Minor Version Upgrades
+### Q83. Major vs Minor Version Upgrades
 
 **Minor (e.g., 15.3 → 15.4)**:
 - Bug fixes, security patches
@@ -2233,15 +2181,11 @@ ORDER BY total_exec_time DESC LIMIT 20;
   2. **Logical replication**: Set up new cluster, replicate, cut over (minimal downtime)
   3. **Dump/restore**: Slowest, simplest
 
-**For MySQL**:
-- `mysql_upgrade` between minors
-- Major version: similar — use replication for low-downtime upgrades
-
 **Real-world example**: Pre-PG 10, upgrades were painful (no native logical rep). Post-PG 10, did 12→14 with 2 minutes of downtime using logical replication.
 
 ---
 
-### Q86. Estimating Table/Index Sizes
+### Q84. Estimating Table/Index Sizes
 
 **How**:
 ```sql
@@ -2269,7 +2213,7 @@ ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC;
 
 ---
 
-### Q87. Statistics Analysis & Rebuilding
+### Q85. Statistics Analysis & Rebuilding
 
 **What**: Stats tell the optimizer about data distribution. Stale stats → bad plans.
 
@@ -2286,9 +2230,6 @@ ANALYZE orders (status);  -- one column only
 
 -- View
 SELECT * FROM pg_stats WHERE tablename='orders';
-
--- MySQL
-ANALYZE TABLE orders;
 ```
 
 **Tune sampling**:
@@ -2302,28 +2243,7 @@ ANALYZE orders;
 
 ---
 
-### Q88. MySQL Table Fragmentation
-
-**What**: Pages partially empty, rows scattered across pages.
-
-**Why it happens**: DELETEs leave gaps; UPDATEs that grow rows cause page splits.
-
-**Detect**:
-```sql
-SELECT table_name, data_length, data_free, data_free / data_length AS fragmentation_pct
-FROM information_schema.tables
-WHERE table_schema = 'mydb';
-```
-
-**Address**:
-- `OPTIMIZE TABLE orders` — rebuilds (online for InnoDB)
-- For heavy delete workloads, partition by time and DROP old partitions instead
-
-**Real-world example**: A logs table accumulated 40% fragmentation after a cleanup job. OPTIMIZE TABLE reclaimed 200GB. Better approach: partition by month, drop oldest partition each month — no fragmentation, no maintenance.
-
----
-
-### Q89. Comprehensive Backup Strategy
+### Q86. Comprehensive Backup Strategy
 
 **Senior engineer's backup checklist**:
 
@@ -2342,7 +2262,7 @@ WHERE table_schema = 'mydb';
 
 ## SECTION 7: PERFORMANCE TUNING
 
-### Q90. Key PostgreSQL Tuning Parameters
+### Q87. Key PostgreSQL Tuning Parameters
 
 **Memory**:
 - `shared_buffers` = 25% of RAM (max ~8GB benefit; OS cache helps beyond)
@@ -2369,7 +2289,7 @@ WHERE table_schema = 'mydb';
 
 ---
 
-### Q91. shared_buffers, effective_cache_size, work_mem (PG)
+### Q88. shared_buffers, effective_cache_size, work_mem
 
 **shared_buffers**: Memory PostgreSQL itself reserves for caching data pages.
 - Set to 25% of RAM
@@ -2394,26 +2314,7 @@ WHERE table_schema = 'mydb';
 
 ---
 
-### Q92. MySQL Buffer Pool, Key Cache, Query Cache
-
-**InnoDB Buffer Pool**: Single most important parameter.
-- `innodb_buffer_pool_size` = 70-80% of RAM on dedicated DB server
-- `innodb_buffer_pool_instances` = 8-16 for large pools (reduces contention)
-- Caches data + indexes + adaptive hash + insert buffer
-
-**Key Cache** (MyISAM only):
-- Largely obsolete — InnoDB is default since 5.5
-
-**Query Cache** (DEPRECATED, removed in 8.0):
-- Cached query results
-- Removed because cache invalidation = global mutex → killed concurrency
-- Replacement: app-level cache (Redis, Memcached)
-
-**Real-world example**: Migration from MyISAM + 2GB key_buffer to InnoDB + 32GB buffer pool: writes 5x faster, no more table locks. Tuning buffer pool is highest-ROI MySQL change.
-
----
-
-### Q93. Database Performance & Disk I/O Patterns
+### Q89. Database Performance & Disk I/O Patterns
 
 **Sequential vs random I/O**:
 - HDD: sequential 100MB/s, random ~100 IOPS (5400 RPM)
@@ -2435,7 +2336,7 @@ WHERE table_schema = 'mydb';
 
 ---
 
-### Q94. CPU/Memory/I/O Bottleneck Diagnosis
+### Q90. CPU/Memory/I/O Bottleneck Diagnosis
 
 **Senior engineer's checklist**:
 
@@ -2469,7 +2370,7 @@ FROM pg_stat_activity GROUP BY 1,2;
 
 ---
 
-### Q95. Data Type Performance Implications
+### Q91. Data Type Performance Implications
 
 **VARCHAR vs CHAR**:
 - VARCHAR: variable length, 1-4 byte length prefix
@@ -2480,7 +2381,7 @@ FROM pg_stat_activity GROUP BY 1,2;
 - INT: 4 bytes, ±2B range — sufficient most cases
 - BIGINT: 8 bytes, ±9 quintillion
 - BIGINT for IDs that may grow (use it for time-series IDs)
-- Storage matters in PKs (smaller PK = smaller secondary indexes in InnoDB)
+- PK width propagates: every index entry and every FK column carries it
 
 **TIMESTAMP vs TIMESTAMPTZ (PG)**:
 - TIMESTAMPTZ stores UTC, converts on display
@@ -2494,7 +2395,7 @@ FROM pg_stat_activity GROUP BY 1,2;
 
 ---
 
-### Q96. Checkpoint Frequency & Performance
+### Q92. Checkpoint Frequency & Performance
 
 **What**: A checkpoint flushes dirty pages from memory to disk.
 
@@ -2517,7 +2418,7 @@ checkpoint_completion_target = 0.9    # spread I/O over 90% of interval
 
 ---
 
-### Q97. Tuning for SSD vs HDD
+### Q93. Tuning for SSD vs HDD
 
 **SSD-specific**:
 - `random_page_cost = 1.1` (vs default 4) — encourages index use
@@ -2535,7 +2436,7 @@ checkpoint_completion_target = 0.9    # spread I/O over 90% of interval
 
 ---
 
-### Q98. Foreign Keys — Performance Impact
+### Q94. Foreign Keys — Performance Impact
 
 **What**: FK constraint enforces referential integrity.
 
@@ -2551,7 +2452,7 @@ checkpoint_completion_target = 0.9    # spread I/O over 90% of interval
 | FK without index on child | DELETE on parent scans child table | Catastrophic perf |
 | No FK (app enforces) | Faster writes | Data integrity bugs |
 
-**Rule**: ALWAYS index FK columns. PostgreSQL doesn't auto-create them; MySQL does for InnoDB.
+**Rule**: ALWAYS index FK columns yourself. PostgreSQL indexes the *referenced* side (it must, for the unique constraint) but **not** the referencing side — unindexed FKs turn every parent delete into a full scan of the child table.
 
 **Real-world example**: Microservices teams sometimes drop FKs at service boundaries (each service owns its data). Internal to a service, keep FKs.
 
@@ -2569,12 +2470,12 @@ CREATE INDEX ON orders (user_id);
 
 ---
 
-### Q99. Query Result Caching
+### Q95. Query Result Caching
 
 **Where to cache**:
 1. **App-level (Redis, Memcached)**: Most flexible, programmatic invalidation
 2. **CDN/HTTP cache**: For idempotent GET endpoints
-3. **DB result cache**: MySQL had query cache (removed); PG doesn't have one
+3. **DB result cache**: PostgreSQL has none by design — caching happens in `shared_buffers` (pages), not results
 4. **Materialized views (PG)**: Pre-computed query results
 
 **Trade-offs**:
@@ -2593,7 +2494,7 @@ CREATE INDEX ON orders (user_id);
 
 ---
 
-### Q100. Optimizing Aggregations on Billions of Rows
+### Q96. Optimizing Aggregations on Billions of Rows
 
 **Approaches**:
 
@@ -2625,7 +2526,7 @@ REFRESH MATERIALIZED VIEW CONCURRENTLY daily_sales;
 
 ## SECTION 8: EDGE CASES & GOTCHAS
 
-### Q101. COUNT(*) vs COUNT(column)
+### Q97. COUNT(*) vs COUNT(column)
 
 **What**:
 - `COUNT(*)` counts ALL rows
@@ -2644,13 +2545,12 @@ SELECT COUNT(1) FROM users;       -- 100 (1 is always non-null)
 
 **Performance**:
 - PG: `COUNT(*)` and `COUNT(1)` are equivalent; both can use index-only scan
-- MySQL InnoDB: same; the "COUNT(1) faster than COUNT(*)" myth is from MyISAM era
 
 **Real-world example**: Engineer wrote `SELECT COUNT(email) FROM users` for a metrics dashboard, then wondered why count dropped 30% — it was always wrong; nulls weren't counted. Code review caught it before production.
 
 ---
 
-### Q102. Cascading Foreign Keys
+### Q98. Cascading Foreign Keys
 
 **What**: `ON DELETE CASCADE` / `ON UPDATE CASCADE` propagates changes to child rows.
 
@@ -2680,7 +2580,7 @@ CREATE TABLE comments (
 
 ---
 
-### Q103. OFFSET Pagination on Large Result Sets
+### Q99. OFFSET Pagination on Large Result Sets
 
 **What**: `SELECT * FROM events ORDER BY id LIMIT 20 OFFSET 1000000` requires DB to fetch and discard 1M rows.
 
@@ -2706,7 +2606,7 @@ SELECT * FROM events WHERE id < ? ORDER BY id DESC LIMIT 20;
 
 ---
 
-### Q104. "Off By One" Problems
+### Q100. "Off By One" Problems
 
 **Common**:
 - BETWEEN is INCLUSIVE on both ends — easy to overlap
@@ -2725,7 +2625,7 @@ WHERE created_at >= '2024-01-01' AND created_at < '2024-02-01'
 
 ---
 
-### Q105. DISTINCT Hiding Bugs
+### Q101. DISTINCT Hiding Bugs
 
 **What**: DISTINCT often used as bandaid for duplicate rows from incorrect joins.
 
@@ -2753,7 +2653,7 @@ WHERE EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_id = u.id);
 
 ---
 
-### Q106. UNIQUE Constraint with Nullable Columns
+### Q102. UNIQUE Constraint with Nullable Columns
 
 **What**: NULL is "unknown" in SQL — NULLs are NOT considered equal in unique constraints (by default).
 
@@ -2761,7 +2661,7 @@ WHERE EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_id = u.id);
 ```sql
 CREATE TABLE t (email TEXT UNIQUE);
 INSERT INTO t VALUES (NULL);  -- OK
-INSERT INTO t VALUES (NULL);  -- OK (in PG, MySQL — NULL ≠ NULL)
+INSERT INTO t VALUES (NULL);  -- OK — in PG, NULL ≠ NULL
 INSERT INTO t VALUES ('a');   -- OK
 INSERT INTO t VALUES ('a');   -- ERROR
 ```
@@ -2784,7 +2684,7 @@ CREATE UNIQUE INDEX ON users (email) WHERE deleted_at IS NULL;
 
 ---
 
-### Q107. IN vs EXISTS
+### Q103. IN vs EXISTS
 
 **What**:
 - `IN`: row's column matches any value in a set/subquery
@@ -2814,7 +2714,7 @@ SELECT * FROM orders o WHERE NOT EXISTS (
 
 ---
 
-### Q108. The Halloween Problem
+### Q104. The Halloween Problem
 
 **What**: A query updates rows that then get re-matched by its own WHERE clause, creating infinite/incorrect updates.
 
@@ -2829,15 +2729,37 @@ UPDATE employees SET salary = salary + 5000 WHERE salary < 25000;
 
 **How DBs prevent it**: Modern DBs materialize the row set before updating (halloween protection).
 
-**Pitfall**: Doesn't apply much in modern PG/MySQL, but cursor-based updates in code can recreate it.
+**Pitfall**: Doesn't apply much in modern PostgreSQL, but cursor-based updates in code can recreate it.
 
 **Real-world example**: Mostly historical, but useful to know — explains why some updates with self-referencing subqueries materialize aggressively (and use more memory).
 
 ---
 
+### Q105. NATURAL JOIN vs Explicit JOIN
+
+**NATURAL JOIN**: Joins on all columns with same name. Implicit, fragile.
+
+**Why avoid**:
+- Schema change (add a column with matching name to both tables) silently breaks queries
+- Hard to read — what columns is it joining on?
+- Standard not consistent across DBs
+
+**Always use explicit**:
+```sql
+-- Bad
+SELECT * FROM orders NATURAL JOIN customers;
+
+-- Good
+SELECT * FROM orders o INNER JOIN customers c ON o.customer_id = c.id;
+```
+
+**Real-world example**: NATURAL JOIN production query worked for a year. Someone added an `audit_id` column to both tables — query started returning 0 rows because the new column didn't match. Painful debugging.
+
+---
+
 ## SECTION 9: POSTGRESQL-SPECIFIC
 
-### Q109. TOAST (The Oversized-Attribute Storage Technique)
+### Q106. TOAST (The Oversized-Attribute Storage Technique)
 
 **What**: Mechanism for storing large field values out-of-line.
 
@@ -2868,7 +2790,7 @@ ALTER TABLE documents ALTER COLUMN content SET STORAGE EXTERNAL;
 
 ---
 
-### Q110. PostgreSQL Extensions
+### Q107. PostgreSQL Extensions
 
 **What**: Loadable modules adding functionality.
 
@@ -2897,7 +2819,7 @@ CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 
 ---
 
-### Q111. DELETE vs TRUNCATE (PG)
+### Q108. DELETE vs TRUNCATE
 
 **What**:
 - DELETE: row-by-row removal, generates dead tuples, can be filtered
@@ -2912,14 +2834,14 @@ CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 | Sequence reset | No | Optional (`RESTART IDENTITY`) |
 | Cascades | Per row | Per table (`CASCADE`) |
 | Bloat | Yes | No |
-| Inside transaction | Fully | Yes (PG; not MySQL!) |
+| Inside transaction | Fully | Yes — TRUNCATE is transactional in PG and can be rolled back |
 | FK enforcement | Always | Can be deferred |
 
 **Real-world example**: Deleting 100M rows from a logs table: DELETE took 4 hours and left 100M dead tuples; TRUNCATE took 100ms with zero bloat. Use TRUNCATE for "delete all" or "delete entire partition."
 
 ---
 
-### Q112. Tablespaces (PG)
+### Q109. Tablespaces
 
 **What**: Named locations on the filesystem where DB objects are stored.
 
@@ -2944,7 +2866,7 @@ ALTER TABLE orders SET TABLESPACE fast_ssd;
 
 ---
 
-### Q113. Window Functions
+### Q110. Window Functions
 
 **What**: Functions that operate over a "window" of rows related to current row, without grouping.
 
@@ -2975,7 +2897,7 @@ FROM daily_revenue;
 
 ---
 
-### Q114. CTEs (Common Table Expressions)
+### Q111. CTEs (Common Table Expressions)
 
 **What**: Named subquery in WITH clause.
 
@@ -3011,7 +2933,7 @@ SELECT * FROM org;
 
 ---
 
-### Q115. Transaction ID & XID Wraparound
+### Q112. Transaction ID & XID Wraparound
 
 **What**: Every TX gets a 32-bit XID. After ~2B TXs, IDs would wrap and ancient tuples appear "in the future."
 
@@ -3037,7 +2959,7 @@ ORDER BY age DESC;
 
 ---
 
-### Q116. pg_stat_statements
+### Q113. pg_stat_statements
 
 **What**: Tracks aggregate stats per normalized query.
 
@@ -3065,7 +2987,7 @@ ORDER BY total_exec_time DESC LIMIT 20;
 
 ---
 
-### Q117. Native JSON Support (PG)
+### Q114. Native JSON Support — json vs jsonb
 
 **What**: `JSON` (text storage) vs `JSONB` (binary).
 
@@ -3096,7 +3018,7 @@ CREATE INDEX ON users ((data->>'email'));  -- specific field
 
 ---
 
-### Q118. Prepared Statements
+### Q115. Prepared Statements
 
 **What**: Pre-parsed, pre-planned query templates.
 
@@ -3125,144 +3047,7 @@ cursor.execute("SELECT * FROM users WHERE id = %s", (42,))
 
 ---
 
-## SECTION 10: MYSQL-SPECIFIC
-
-### Q119. InnoDB vs MyISAM
-
-**What**:
-- **InnoDB**: ACID, row-level locking, MVCC, FK support. Default since 5.5.
-- **MyISAM**: No ACID, table-level locking, no FKs. Legacy.
-
-**Why never use MyISAM today**:
-- Crash unsafe
-- Table locks → no concurrent writes
-- No transaction support
-- No FK enforcement
-
-**The only remaining MyISAM excuse**: Read-only data with COUNT(*) optimization — and even that's better in InnoDB 8.0 with parallel scan.
-
-**Real-world example**: A team in 2020 still ran on MyISAM. Every crash = hours of repair. Migration to InnoDB resolved all "crash recovery" tickets.
-
----
-
-### Q120. Why MySQL Query Cache Was Removed
-
-**What** (pre-8.0): Cache of query → result mapping.
-
-**Why removed**:
-1. **Global mutex** for invalidation — killed concurrency at scale
-2. Any write to a cached table invalidated all its cache entries
-3. Helped only specific workloads (read-heavy, slow-changing)
-4. Better solved at app layer (Redis)
-
-**Replacement**: Application-level caching, materialized views (not native in MySQL — use triggers or app), or move to PostgreSQL with materialized views.
-
-**Real-world example**: Many teams' "query cache hit ratio" plummeted to 10% on write-heavy workloads — was actively hurting performance. Removed in 8.0.
-
----
-
-### Q121. InnoDB Redo & Undo Logs
-
-**What**:
-- **Redo log** (`ib_logfile*`): Write-ahead log for crash recovery (like PG's WAL)
-- **Undo log**: Stores old versions of rows for MVCC + rollback
-
-**How they cooperate**:
-- COMMIT: write to redo, return success
-- Background: flush dirty pages to disk
-- Crash: replay redo from last checkpoint
-- Rollback: apply undo
-- Read in MVCC: read row, then use undo to find correct version for snapshot
-
-**Tuning**:
-```ini
-innodb_log_file_size = 2G        # bigger = less frequent flushes, slower recovery
-innodb_log_files_in_group = 2     # typically 2
-innodb_flush_log_at_trx_commit = 1  # 1=safe, 2=fast (1s data loss risk)
-innodb_undo_log_truncate = ON     # let undo shrink
-```
-
-**Real-world example**: A 100MB redo log on a write-heavy workload caused constant flushing → I/O spikes. Increased to 4GB → 80% reduction in I/O overhead.
-
----
-
-### Q122. InnoDB Change Buffer
-
-**What**: Buffer for changes to secondary index pages not in buffer pool.
-
-**Why**: Avoids reading secondary index pages on every write — defers and batches.
-
-**When it helps**:
-- Tables larger than buffer pool
-- Many secondary indexes
-- Random-ish inserts/updates
-
-**Tuning**:
-```ini
-innodb_change_buffering = all      # changes for all types
-innodb_change_buffer_max_size = 25 # % of buffer pool
-```
-
-**Real-world example**: A 500GB table with 10 secondary indexes on a 64GB buffer pool. Change buffer absorbed updates without thrashing — 50% reduction in random I/O.
-
----
-
-### Q123. Doublewrite Buffer
-
-**What**: InnoDB writes pages first to a "doublewrite buffer" then to actual location.
-
-**Why**: Protects against torn writes (partial page writes during power loss).
-
-**Cost**: 2x write amplification, but sequential write so cheaper than expected.
-
-**Tuning**:
-```ini
-innodb_doublewrite = ON  # default; turn off only with atomic-write storage
-```
-
-**Real-world example**: On NVMe with atomic write support, disabling doublewrite saved 20% on writes. Most storage doesn't support atomic page writes — leave enabled.
-
----
-
-### Q124. Adaptive Hash Indexing (AHI)
-
-**What**: InnoDB auto-creates in-memory hash indexes for frequently accessed B-tree paths.
-
-**Why**: Hash lookups are O(1) vs B-tree O(log n).
-
-**When it helps**: Hot equality lookups; doesn't help range scans.
-
-**Pitfall**:
-- Contention on the AHI mutex at very high concurrency
-- Some workloads benefit from disabling: `innodb_adaptive_hash_index = OFF`
-
-**Real-world example**: A workload spiked at 50K QPS — AHI mutex became a bottleneck. Disabling AHI: QPS went to 80K. Counterintuitive but real at high scale.
-
----
-
-### Q125. NATURAL JOIN vs Explicit JOIN
-
-**NATURAL JOIN**: Joins on all columns with same name. Implicit, fragile.
-
-**Why avoid**:
-- Schema change (add a column with matching name to both tables) silently breaks queries
-- Hard to read — what columns is it joining on?
-- Standard not consistent across DBs
-
-**Always use explicit**:
-```sql
--- Bad
-SELECT * FROM orders NATURAL JOIN customers;
-
--- Good
-SELECT * FROM orders o INNER JOIN customers c ON o.customer_id = c.id;
-```
-
-**Real-world example**: NATURAL JOIN production query worked for a year. Someone added an `audit_id` column to both tables — query started returning 0 rows because the new column didn't match. Painful debugging.
-
----
-
-### Q126. Generated Columns
+### Q116. Generated Columns
 
 **What**: Columns whose value is derived from other columns.
 
@@ -3293,66 +3078,15 @@ CREATE INDEX ON users (email_lower);
 
 ---
 
-### Q127. Binlog Role in Replication & Recovery
+## SECTION 10: DATA TYPES & STORAGE
 
-**What**: Binary log of all data changes.
-
-**Roles**:
-1. **Replication**: Replicas read binlog from primary
-2. **Recovery**: Point-in-time recovery after backup
-3. **CDC**: Tools like Debezium consume binlog → Kafka → downstream
-
-**Configuration**:
-```ini
-log_bin = mysql-bin
-binlog_format = ROW             # safest
-binlog_expire_logs_seconds = 604800  # 7 days
-sync_binlog = 1                 # fsync after each TX (durable)
-```
-
-**Real-world example**: A team had `sync_binlog = 0` for performance. Crash lost 5 min of binlog. Replica diverged. Lesson: 1 is the safe value; modern fsync is fast enough for OLTP.
-
----
-
-### Q128. MySQL Optimizer Hints
-
-**What**: Per-query instructions to optimizer.
-
-**Why use (sparingly)**: Override optimizer when you know better.
-
-**Examples**:
-```sql
--- Force index
-SELECT /*+ INDEX(orders idx_user_id) */ * FROM orders WHERE user_id = 5;
-
--- Force join order
-SELECT /*+ JOIN_ORDER(t1, t2) */ * FROM t1 JOIN t2 ON ...;
-
--- Set max execution time
-SELECT /*+ MAX_EXECUTION_TIME(1000) */ * FROM big_table;
-
--- Read from replica
-SELECT /*+ SET_VAR(read_only=ON) */ ...;
-```
-
-**Pitfalls**:
-- Hints become wrong as data grows
-- Maintenance burden
-- Better fix: improve stats, indexes, rewrite query
-
-**Real-world example**: A team relied on FORCE INDEX everywhere. After major data growth, hints picked wrong indexes — queries 10x slower than letting optimizer decide. Removed hints, ran ANALYZE — better.
-
----
-
-## SECTION 11: DATA TYPES & STORAGE
-
-### Q129. VARCHAR(max) Implications
+### Q117. VARCHAR(max) Implications
 
 **What**: Choosing too-large VARCHAR has surprising implications.
 
 **Pitfalls**:
-1. **Memory allocation for sorts**: Some DBs allocate based on declared length (MySQL with utf8mb4 = 4 bytes/char × length)
-2. **Max key length**: Indexes on VARCHAR(255) with utf8mb4 = 1020 bytes — close to InnoDB 3072 byte limit
+1. **Memory allocation for sorts**: PostgreSQL sorts on actual value length, not declared length — but some clients and drivers still pre-allocate from the declared width
+2. **Max key length**: A btree index entry must fit in roughly 2704 bytes (⅓ of an 8KB page); long text columns need an expression index on a hash or prefix instead
 3. **Replication payload size**: Wider columns = bigger binlog rows
 
 **Recommendation**:
@@ -3365,12 +3099,7 @@ SELECT /*+ SET_VAR(read_only=ON) */ ...;
 
 ---
 
-### Q130. DATE vs DATETIME vs TIMESTAMP
-
-**MySQL**:
-- DATE: just date, 3 bytes
-- DATETIME: date+time, 8 bytes, no TZ
-- TIMESTAMP: date+time, 4 bytes (until 2038!), converts to UTC
+### Q118. DATE vs DATETIME vs TIMESTAMP
 
 **PostgreSQL**:
 - DATE
@@ -3380,11 +3109,11 @@ SELECT /*+ SET_VAR(read_only=ON) */ ...;
 
 **Rule for PG**: Always TIMESTAMPTZ for events. Never TIMESTAMP without TZ for moments in time.
 
-**Real-world example**: A global app used MySQL TIMESTAMP. Hit 2038 problem timing during testing. Migrated to BIGINT (epoch ms) — also avoids TZ ambiguity.
+**Real-world example**: A global app stored event times as `TIMESTAMP` without TZ. Servers in two regions wrote local time into the same column; reports silently mixed timezones for months. Migrating to `TIMESTAMPTZ` fixed it — PG stores UTC and renders in the session TZ.
 
 ---
 
-### Q131. DECIMAL vs FLOAT/DOUBLE
+### Q119. DECIMAL vs FLOAT/DOUBLE
 
 **Use DECIMAL for**:
 - Money
@@ -3408,7 +3137,7 @@ SELECT 0.1::DECIMAL(10,2) + 0.2::DECIMAL(10,2);  -- 0.30
 
 ---
 
-### Q132. ENUM Trade-offs
+### Q120. ENUM Trade-offs
 
 **What**: Column type with predefined values.
 
@@ -3418,7 +3147,7 @@ SELECT 0.1::DECIMAL(10,2) + 0.2::DECIMAL(10,2);  -- 0.30
 - Validation built-in
 
 **Cons**:
-- Schema change required to add values (ALTER TABLE in MySQL; ALTER TYPE in PG)
+- Schema change required to add values (`ALTER TYPE ... ADD VALUE`)
 - Ordering can be confusing
 - Hard to migrate between DBs
 - ORMs don't always handle well
@@ -3434,7 +3163,7 @@ status TEXT NOT NULL CHECK (status IN ('pending', 'active', 'cancelled', 'refund
 
 ---
 
-### Q133. JSON Performance Considerations
+### Q121. JSON Performance Considerations
 
 **Pros**:
 - Schema flexibility
@@ -3462,34 +3191,31 @@ status TEXT NOT NULL CHECK (status IN ('pending', 'active', 'cancelled', 'refund
 
 ---
 
-### Q134. TEXT vs VARCHAR Storage
+### Q122. TEXT vs VARCHAR Storage
 
 **PostgreSQL**: TEXT and VARCHAR are equivalent in storage (no length difference in performance). TEXT preferred unless you need length validation.
 
-**MySQL**:
-- VARCHAR stored inline up to row limit
-- TEXT stored externally (off-page) when row size exceeds 8KB
-- TEXT can't have full-length index (only prefix)
+**Both** are `varlena` types and both get TOASTed off-page once the row exceeds ~2KB — so the choice is about validation, not storage.
 
-**Real-world example**: MySQL team kept hitting "row size too large" errors as they added VARCHAR columns. Switching some to TEXT moved them off-page, fixed the issue.
+**Real-world example**: A team used `VARCHAR(255)` everywhere by habit, then hit app-level truncation errors when users pasted longer content. Switching to `TEXT` with an explicit `CHECK (length(col) <= 255)` made the limit a deliberate business rule instead of an accident of schema design.
 
 ---
 
-### Q135. UUID vs Auto-Incrementing INT as PK
+### Q123. UUID vs Auto-Incrementing INT as PK
 
 **Comparison**:
 | | UUID | BIGINT/INT auto-inc |
 |---|---|---|
 | Size | 16 bytes | 4-8 bytes |
 | Generation | Anywhere (client, DB) | DB-only |
-| Random ordering | Yes (v4) — bad for InnoDB | No — clustered insert |
+| Random ordering | Yes (v4) — scatters index writes | No — appends to the index's right edge |
 | Multi-region merge | Easy (no collisions) | Hard (need ranges) |
 | Predictability | Unpredictable (good for security) | Sequential (bad for security) |
 | Index bloat | High with v4 | Low |
 
 **Best of both — UUIDv7 (2024+)**: Time-ordered UUIDs — clustered-insert friendly + globally unique.
 
-**Real-world example**: A team used UUID v4 PKs in InnoDB. Write throughput hit a wall — random PK = page splits everywhere. Migrated to UUIDv7 (or ULID) — same uniqueness benefits, monotonic insertions, write throughput 3x.
+**Real-world example**: A team used UUID v4 PKs. Because PG is heap-organized the *table* didn't fragment, but every insert still dirtied a random leaf page of the PK index — the index working set stopped fitting in cache and write throughput hit a wall. Migrating to UUIDv7 (or ULID) restored monotonic index inserts: same uniqueness, ~3x write throughput.
 
 ```sql
 -- PostgreSQL 18+ supports UUIDv7
@@ -3498,11 +3224,7 @@ INSERT INTO orders (id) VALUES (uuidv7());
 
 ---
 
-### Q136. Nullable vs Non-Nullable Storage
-
-**MySQL**:
-- Each nullable column adds 1 bit to a null bitmap
-- Saving 1 byte per null can matter on billions of rows
+### Q124. Nullable vs Non-Nullable Storage
 
 **PostgreSQL**:
 - Null bitmap only created if at least one NULL exists in row
@@ -3515,27 +3237,21 @@ INSERT INTO orders (id) VALUES (uuidv7());
 
 ---
 
-### Q137. SIGNED vs UNSIGNED Integers
+### Q125. No Unsigned Integers — Living Without UNSIGNED
 
-**What** (MySQL):
-- SIGNED INT: -2.1B to +2.1B
-- UNSIGNED INT: 0 to 4.2B
+**What**: PostgreSQL has **no unsigned integer types**. `INTEGER` is always signed (-2.1B to +2.1B), `BIGINT` always signed (±9.2 × 10^18).
 
-**PostgreSQL**: No unsigned types — use BIGINT or CHECK constraint.
+**Why it matters**: You cannot buy range by dropping the sign the way MySQL's `UNSIGNED` lets you. The options are:
+- Go to `BIGINT` (8 bytes) — the normal answer
+- Keep `INTEGER` and add `CHECK (col >= 0)` to express intent and catch negative-value bugs
 
-**Why UNSIGNED matters**:
-- 2x range for same storage when negatives don't apply (counters, IDs)
-- Catches "negative" bugs at DB level
+**Pitfall**: `CHECK (col >= 0)` documents the constraint but buys **zero** extra range — the ceiling is still 2.1B. Teams migrating from MySQL sometimes assume otherwise and get caught twice.
 
-**Pitfalls**:
-- Mixed SIGNED/UNSIGNED arithmetic gives surprising results
-- Most app frameworks default to SIGNED
-
-**Real-world example**: A "user count" column overflowed past 2.1B. Quick fix: ALTER to UNSIGNED INT — bought 2x time before BIGINT migration.
+**Real-world example**: A counter column approached the 2.1B `INTEGER` ceiling. There was no `UNSIGNED` escape hatch to double it, so the only fix was `ALTER TABLE ... ALTER COLUMN ... TYPE BIGINT` — a full table rewrite that needed a maintenance window. Lesson: pick `BIGINT` for anything that counts events.
 
 ---
 
-### Q138. Bit Flags Efficiently
+### Q126. Bit Flags Efficiently
 
 **Options**:
 
@@ -3564,9 +3280,9 @@ Pros: flexible. Cons: slower queries.
 
 ---
 
-## SECTION 12: SECURITY
+## SECTION 11: SECURITY
 
-### Q139. SQL Injection & Parameterized Queries
+### Q127. SQL Injection & Parameterized Queries
 
 **What**: Untrusted input concatenated into SQL → attacker controls query.
 
@@ -3594,7 +3310,7 @@ cursor.execute("SELECT * FROM users WHERE id = %s", (user_input,))
 
 ---
 
-### Q140. Principle of Least Privilege
+### Q128. Principle of Least Privilege
 
 **What**: Grant each role exactly the permissions it needs — no more.
 
@@ -3618,15 +3334,15 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO app_reader;
 
 ---
 
-### Q141. Encryption At Rest vs In Transit
+### Q129. Encryption At Rest vs In Transit
 
 **At rest**:
 - Disk encryption (LUKS, AWS EBS encryption, gp3 transparent encryption)
-- Per-DB: PostgreSQL has pg_crypto for column-level; MySQL has Transparent Data Encryption (TDE)
+- Per-column: `pgcrypto` for application-managed column encryption
 - Backup encryption (KMS-encrypted S3)
 
 **In transit**:
-- TLS for DB connections (`sslmode=require` in PG; `--ssl` in MySQL)
+- TLS for DB connections — use `sslmode=verify-full`, not `require` (which skips cert validation)
 - Replication encryption (set `ssl=on` on standby connections)
 
 **Why both**:
@@ -3637,7 +3353,7 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO app_reader;
 
 ---
 
-### Q142. Row-Level Security (RLS, PostgreSQL)
+### Q130. Row-Level Security (RLS, PostgreSQL)
 
 **What**: Database-enforced rules deciding which rows a session sees.
 
@@ -3668,11 +3384,10 @@ SELECT * FROM orders;  -- only tenant 42's rows
 
 ---
 
-### Q143. Insecure Default Configurations
+### Q131. Insecure Default Configurations
 
 **Default risks**:
 - Postgres: superuser `postgres` accessible from localhost without password
-- MySQL: pre-8.0 had empty root password by default
 - Both: `trust` auth in pg_hba.conf allows any local user
 
 **Senior engineer baseline hardening**:
@@ -3681,15 +3396,15 @@ SELECT * FROM orders;  -- only tenant 42's rows
 3. Listen only on required interfaces — bind to private subnet
 4. Disable unused features (`fsync = off` only in test envs!)
 5. Apply security patches promptly
-6. Audit logs (pgaudit, MySQL audit plugin)
+6. Audit logs (pgaudit)
 
-**Real-world example**: Shodan scans regularly find tens of thousands of internet-exposed Postgres/MySQL instances. Many use default passwords. Always assume the network is hostile.
+**Real-world example**: Shodan scans regularly find tens of thousands of internet-exposed PostgreSQL instances. Many use default passwords or `trust` auth in `pg_hba.conf`. Always assume the network is hostile.
 
 ---
 
-## SECTION 13: PRACTICAL SCENARIOS
+## SECTION 12: PRACTICAL SCENARIOS
 
-### Q144. 2-Second Query → 200ms Optimization
+### Q132. 2-Second Query → 200ms Optimization
 
 **Senior engineer's playbook**:
 
@@ -3712,7 +3427,7 @@ SELECT * FROM orders;  -- only tenant 42's rows
 
 ---
 
-### Q145. Redesigning a 500GB Table
+### Q133. Redesigning a 500GB Table
 
 **Diagnose first**:
 1. Profile access patterns: which queries, which columns, how stale data can be
@@ -3745,7 +3460,7 @@ CREATE TABLE events_2024_01 PARTITION OF events
 
 ---
 
-### Q146. Replication Lag Spike — Diagnostic Steps
+### Q134. Replication Lag Spike — Diagnostic Steps
 
 **Step 1: Confirm magnitude**
 ```sql
@@ -3767,13 +3482,13 @@ SELECT EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp()));
 **Step 3: Mitigate**
 - Kill the offending query/transaction
 - Throttle the source operation
-- For systemic: tune `max_wal_senders`, parallel apply (MySQL)
+- For systemic: tune `max_wal_senders`, `wal_compression`, and replica I/O
 
 **Real-world example**: Replica lag jumped to 45 min Sunday 2 AM. Cause: a weekly `REINDEX` job on primary. Switched to `REINDEX CONCURRENTLY` — incremental, no replica blocking.
 
 ---
 
-### Q147. Adding NOT NULL Column to 100M-Row Table
+### Q135. Adding NOT NULL Column to 100M-Row Table
 
 **Bad approach**:
 ```sql
@@ -3797,18 +3512,16 @@ ALTER TABLE orders ALTER COLUMN status SET NOT NULL;
 ALTER TABLE orders DROP CONSTRAINT status_not_null;
 ```
 
-**For MySQL**: Use `pt-online-schema-change` or `gh-ost`.
-
 **Real-world example**: GitHub used gh-ost to add columns to billions-row tables without downtime. Open source — use these tools, don't reinvent.
 
 ---
 
-### Q148. Cross-Database Migrations
+### Q136. Cross-Database Migrations
 
 **Approach depends on size & downtime tolerance**:
 
 **Small (< 50GB), can have downtime**:
-- pg_dump/mysqldump + restore
+- `pg_dump` + `pg_restore` for PG-to-PG
 
 **Large + minimal downtime**:
 1. Continuous replication (logical or via CDC tool like Debezium)
@@ -3824,7 +3537,7 @@ ALTER TABLE orders DROP CONSTRAINT status_not_null;
 
 ---
 
-### Q149. 10B Row Aggregation in 30 Minutes → Optimize
+### Q137. 10B Row Aggregation in 30 Minutes → Optimize
 
 **Strategies**:
 
@@ -3844,7 +3557,7 @@ ALTER TABLE orders DROP CONSTRAINT status_not_null;
 
 ---
 
-### Q150. Real-Time Analytics Without OLTP Impact
+### Q138. Real-Time Analytics Without OLTP Impact
 
 **Architecture**:
 ```
@@ -3866,7 +3579,7 @@ ALTER TABLE orders DROP CONSTRAINT status_not_null;
 
 ---
 
-### Q151. Load Testing Database Migrations
+### Q139. Load Testing Database Migrations
 
 **Approach**:
 1. **Capture production traffic** (pgbadger, pg_stat_statements, slow query log)
@@ -3886,7 +3599,7 @@ ALTER TABLE orders DROP CONSTRAINT status_not_null;
 
 ---
 
-### Q152. Bitemporal Data (Valid Time + Transaction Time)
+### Q140. Bitemporal Data (Valid Time + Transaction Time)
 
 **What**:
 - **Valid time**: When fact is true in real world (e.g., contract effective Jan 1 - Dec 31)
@@ -3915,7 +3628,7 @@ WHERE valid_from <= '2024-02-15' AND valid_to > '2024-02-15'
 
 ---
 
-### Q153. Caching Strategy for Read-Heavy App
+### Q141. Caching Strategy for Read-Heavy App
 
 **Layer hierarchy** (top to bottom = closer to user):
 
@@ -3959,7 +3672,7 @@ WHERE valid_from <= '2024-02-15' AND valid_to > '2024-02-15'
 6. **Test recovery, not just backups**: Untested backups don't exist
 7. **Document the why**: Future-you and your team need context for decisions
 8. **Stay current selectively**: Know what's new (UUIDv7, PG 18 features), but don't chase every shiny thing
-9. **Right tool for the job**: PG/MySQL aren't analytics DBs — use ClickHouse, BigQuery, etc. when appropriate
+9. **Right tool for the job**: PostgreSQL is not an analytics DB — use ClickHouse, BigQuery, etc. when appropriate
 10. **Senior engineers say "it depends" — but then explain what it depends on**
 
 ### Final Reading List
@@ -3967,9 +3680,8 @@ WHERE valid_from <= '2024-02-15' AND valid_to > '2024-02-15'
 - "Database Internals" by Alex Petrov (concepts)
 - "Designing Data-Intensive Applications" by Martin Kleppmann (essential)
 - "PostgreSQL 16 Internals" by Egor Rogov (free online, deep dive)
-- "High Performance MySQL" 4th ed by Schwartz, Zaitsev, et al.
-- PostgreSQL & MySQL release notes (every major version)
-- depesz.com, planet.postgresql.org, percona.com/blog (ongoing)
+- PostgreSQL release notes (every major version)
+- depesz.com, planet.postgresql.org (ongoing)
 
 ### Skills That Compound
 
@@ -3982,5 +3694,5 @@ WHERE valid_from <= '2024-02-15' AND valid_to > '2024-02-15'
 
 *This guide is meant for active use. Mark it up, add your own examples from production incidents, and revisit periodically. The answers are starting points — the real learning happens when you face these situations and refine your judgment.*
 
-*Last updated: May 2026 — Reflects PostgreSQL 17, MySQL 8.4*
+*Last updated: May 2026 — Reflects PostgreSQL 17*
 
